@@ -125,14 +125,25 @@ Proof.
   (* |- (17 * Z_of_int x)%Z = (3 * Z_of_int x + 14 * Z_of_int x)%Z *)
 Abort.
 
-Lemma Op_eq_op_int_subproof (n m : int) :
+(* Lemma Op_eq_op_int_subproof (n m : int) :
   Z_of_bool (n == m) = isZero (Z_of_int n - Z_of_int m).
 Proof. Admitted.
 
 Instance Op_eq_op_int : BinOp (@eq_op int_eqType) :=
   mkbop int int bool Z (@eq_op _) Inj_int_Z Inj_int_Z Inj_bool_Z
         (fun x y : Z => isZero (Z.sub x y)) Op_eq_op_int_subproof.
-Add BinOp Op_eq_op_int.
+Add BinOp Op_eq_op_int. *)
+
+Definition eq_int x y := is_true (@eq_op int_eqType x y).
+Definition add_int x y := @GRing.add int_ZmodType x y.
+
+Lemma Op_eq_op_int_subproof (n m : int) :
+  n == m <-> inj n = inj m.
+Proof. Admitted.
+
+Instance Op_eq_op_int : BinRel eq_int :=
+  {| TR := @eq Z; TRInj := Op_eq_op_int_subproof |}.
+Add BinRel Op_eq_op_int.
 
 Ltac zify2 :=
   unfold is_true in *;
@@ -141,79 +152,31 @@ Ltac zify2 :=
 
 Goal forall x y : int, x == 1 -> y == 0 -> x + y == 1.
 Proof.
-  zify2.
+  move=> x y.
+  rewrite -!/(eq_int _ _).
+  zify.
 Abort.
-
-(*
-
-x, y: int
-z1: Z
-Heqz1: z1 = (Z_of_int x - 1)%Z
-z2: Z
-H: z2 = 1%Z
-z: Z
-Heqz: z = (Z_of_int y - 0)%Z
-z0: Z
-H0: z0 = 1%Z
-cstr, cstr0, cstr1, cstr2: True
-H1: (0 <= z0 <= 1)%Z /\ (z = 0%Z <-> z0 = 1%Z)
-H2: (0 <= z2 <= 1)%Z /\ (z1 = 0%Z <-> z2 = 1%Z)
-z3: Z
-Heqz3: z3 = (Z_of_int x + Z_of_int y - 1)%Z
-z4: Z
-H3: (0 <= z4 <= 1)%Z /\ (z3 = 0%Z <-> z4 = 1%Z)
-1/1
-z4 = 1%Z
-
-*)
 
 Goal forall x : int, 1 * x == x.
 Proof.
-  zify2.
+  move=> x.
+  rewrite -!/(eq_int _ _).
+  zify.
 Abort.
-
-(*
-x: int
-cstr, cstr0: True
-z: Z
-Heqz: z = (1 * Z_of_int x - Z_of_int x)%Z
-z0: Z
-H: (0 <= z0 <= 1)%Z /\ (z = 0%Z <-> z0 = 1%Z)
-1/1
-z0 = 1%Z
-*)
 
 Goal forall x y : int, x + y == 1 * y + x.
 Proof.
-  zify2.
+  move=> x y.
+  rewrite -!/(eq_int _ _).
+  zify.
 Abort.
-
-(*
-x, y: int
-cstr, cstr0, cstr1, cstr2: True
-z: Z
-Heqz: z = (Z_of_int x + Z_of_int y - (1 * Z_of_int y + Z_of_int x))%Z
-z0: Z
-H: (0 <= z0 <= 1)%Z /\ (z = 0%Z <-> z0 = 1%Z)
-1/1
-z0 = 1%Z
-*)
 
 Goal forall x : int, (17%:R) * x == (3%:R) * x + (14%:R) * x.
 Proof.
-  zify2.
+  move=> x.
+  rewrite -!/(eq_int _ _).
+  zify.
 Abort.
-
-(*
-x: int
-cstr, cstr0, cstr1: True
-z: Z
-Heqz: z = (17 * Z_of_int x - (3 * Z_of_int x + 14 * Z_of_int x))%Z
-z0: Z
-H: (0 <= z0 <= 1)%Z /\ (z = 0%Z <-> z0 = 1%Z)
-1/1
-z0 = 1%Z
-*)
 
 End RingZify.
 
