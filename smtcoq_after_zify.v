@@ -1,4 +1,4 @@
-Add Rec LoadPath "~/Desktop/smtcoq2/smtcoq/src" as SMTCoq.
+(* warning: SMTCoq requires Coq 8.9.0 *)
 Require Import SMTCoq.SMTCoq.
 
 Require Import ZArith.

@@ -1,12 +1,7 @@
-(* 4) utiliser les notations génériques GRing *)
 Module RingZify.
 
 From Coq Require Import ZArith Psatz ZifyClasses ZifyInst ZifyBool.
-From Coq Require Export Lia.
-From mathcomp Require Import ssreflect ssrfun ssrbool eqtype ssrnat seq path.
-From mathcomp Require Import div choice fintype tuple finfun bigop finset prime.
-From mathcomp Require Import binomial ssralg countalg ssrnum ssrint rat.
-From mathcomp Require Import intdiv.
+From mathcomp Require Import all_ssreflect all_algebra.
 
 Set Implicit Arguments.
 Unset Strict Implicit.
@@ -17,6 +12,8 @@ Import GRing.Theory Num.Theory.
 Open Scope ring_scope.
 
 Local Delimit Scope Z_scope with Z.
+
+(* same declarations about int as in ssrint_type.v *)
 
 Definition Z_of_int (n : int) : Z :=
   match n with
@@ -47,6 +44,8 @@ Instance Op_Negz : UnOp Negz :=
   {| TUOp := fun x => (- (x + 1))%Z; TUOpInj := Op_Negz_subproof |}.
 Add UnOp Op_Negz.
 
+(* declarations for ring addition and constants *)
+
 Lemma Op_GRing_add_int_subproof : forall n m : int,
   Z_of_int (@GRing.add int_ZmodType n m) = Z.add (Z_of_int n) (Z_of_int m).
 Proof. Admitted.
@@ -71,6 +70,7 @@ Goal forall x y : int, x = 0 -> y = 0 -> x + y = 0.
 Proof.
   zify.
   (* |- (Z_of_int x + Z_of_int y)%Z = 0%Z *)
+  (* everything is handled correctly *)
 Abort.
 
 Goal forall x y : int, x = 1 -> y = 0 -> x + y = 1.
@@ -78,6 +78,8 @@ Proof.
   zify.
   (* |- (Z_of_int x + Z_of_int y)%Z = 1%Z *)
 Abort.
+
+(* adding ring multiplication *)
 
 Lemma Op_GRing_mul_int_subproof : forall n m : int,
   Z_of_int (@GRing.mul int_Ring n m) = Z.mul (Z_of_int n) (Z_of_int m).
@@ -109,7 +111,10 @@ Goal forall x y : int, x + y = 1 * y + x.
 Proof.
   zify.
   (* |- (Z_of_int x + Z_of_int y)%Z = (1 * Z_of_int y + Z_of_int x)%Z *)
+  (* ok *)
 Abort.
+
+(* to handle int constants injection into Z, we need to define an injection of natmul *)
 
 Lemma Op_GRing_natmul_int_subproof : forall (n : nat),
   inj (@GRing.natmul (GRing.Ring.zmodType int_Ring) (GRing.one int_Ring) n) = id (inj n).
@@ -123,38 +128,31 @@ Goal forall x : int, (17%:R) * x = (3%:R) * x + (14%:R) * x.
 Proof.
   zify.
   (* |- (17 * Z_of_int x)%Z = (3 * Z_of_int x + 14 * Z_of_int x)%Z *)
+  (* ok *)
 Abort.
 
-(* Lemma Op_eq_op_int_subproof (n m : int) :
-  Z_of_bool (n == m) = isZero (Z_of_int n - Z_of_int m).
-Proof. Admitted.
+(* how does the tactic handle boolean equalities? *)
 
-Instance Op_eq_op_int : BinOp (@eq_op int_eqType) :=
-  mkbop int int bool Z (@eq_op _) Inj_int_Z Inj_int_Z Inj_bool_Z
-        (fun x y : Z => isZero (Z.sub x y)) Op_eq_op_int_subproof.
-Add BinOp Op_eq_op_int. *)
-
+(* wrapping == + bool to Prop coercion in one function *)
 Definition eq_int x y := is_true (@eq_op int_eqType x y).
-Definition add_int x y := @GRing.add int_ZmodType x y.
 
 Lemma Op_eq_op_int_subproof (n m : int) :
   n == m <-> inj n = inj m.
 Proof. Admitted.
 
+(* now eq_int is a binary relation injected into @eq Z *)
+
 Instance Op_eq_op_int : BinRel eq_int :=
   {| TR := @eq Z; TRInj := Op_eq_op_int_subproof |}.
 Add BinRel Op_eq_op_int.
-
-Ltac zify2 :=
-  unfold is_true in *;
-  do ?rewrite -> unfold_in in *;
-  zify.
 
 Goal forall x y : int, x == 1 -> y == 0 -> x + y == 1.
 Proof.
   move=> x y.
   rewrite -!/(eq_int _ _).
   zify.
+  (* |- (Z_of_int x + Z_of_int y)%Z = 1%Z *)
+  (* same final goal as the one we got with @eq earlier (L76) *)
 Abort.
 
 Goal forall x : int, 1 * x == x.
@@ -178,13 +176,39 @@ Proof.
   zify.
 Abort.
 
-End RingZify.
+(* the mczify way is to declare == as a binary operator *)
+(* the bool output type is injected into Z *)
 
-(* j'ai tenté les versions plus génériques mais zify les ignore *)
-(* Lemma Op_GRing_add_subproof : forall n m,
-  inj (n + m) = Z.add (inj n) (inj m).
+Ltac zify2 :=
+  unfold is_true in *;
+  do ?rewrite -> unfold_in in *;
+  zify.
+
+Lemma Op_eq_op_int_subproof2 (n m : int) :
+  Z_of_bool (n == m) = isZero (Z_of_int n - Z_of_int m).
 Proof. Admitted.
 
-Instance Op_GRing_add : BinOp (@GRing.add _) :=
-  {| TBOp := Z.add; TBOpInj := Op_GRing_add_subproof |}.
-Add BinOp Op_GRing_add. *)
+Instance Op_eq_op_int2 : BinOp (@eq_op int_eqType) :=
+  mkbop int int bool Z (@eq_op _) Inj_int_Z Inj_int_Z Inj_bool_Z
+        (fun x y : Z => isZero (Z.sub x y)) Op_eq_op_int_subproof2.
+Add BinOp Op_eq_op_int2.
+
+Goal forall x : int, (17%:R) * x == (3%:R) * x + (14%:R) * x.
+Proof.
+  zify2.
+Abort.
+
+(* the proof context looks like this:
+
+x: int
+cstr, cstr0, cstr1: True
+z: Z
+Heqz: z = (17 * Z_of_int x - (3 * Z_of_int x + 14 * Z_of_int x))%Z
+z0: Z
+H: (0 <= z0 <= 1)%Z /\ (z = 0%Z <-> z0 = 1%Z)
+----------------------------------------------------------------------
+1/1
+z0 = 1%Z
+*)
+
+End RingZify.
