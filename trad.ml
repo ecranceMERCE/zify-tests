@@ -40,25 +40,35 @@ let list_eq l l' =
     | _ -> Error (-1)
   in list_eq' 0 (l, l')
 
-(* particular known types and functions *)
+(* particular known types and values *)
 
 let c_int = Tname "int"
 let c_Z = Tname "Z"
 let c_nat = Tname "nat"
 let c_T = Tname "T"
+let c_bool = Tname "bool"
 
-let impl = Var("->", Tarrow { in_types = [TProp; TProp]; out_type = TProp })
-let eq t = Var("=", Tarrow { in_types = [t; t]; out_type = TProp })
-let lt t = Var("<", Tarrow { in_types = [t; t]; out_type = TProp })
-let mul t = Var("*", Tarrow { in_types = [t; t]; out_type = t })
-let add t = Var("+", Tarrow { in_types = [t; t]; out_type = t })
+let impl = Var ("->", Tarrow { in_types = [TProp; TProp]; out_type = TProp })
+let eq t = Var ("=", Tarrow { in_types = [t; t]; out_type = TProp })
+let lt t = Var ("<", Tarrow { in_types = [t; t]; out_type = TProp })
+let mul t = Var ("*", Tarrow { in_types = [t; t]; out_type = t })
+let add t = Var ("+", Tarrow { in_types = [t; t]; out_type = t })
+
+let implb = Var ("-->", Tarrow { in_types = [c_bool; c_bool]; out_type = c_bool })
+let eqb t = Var ("=?", Tarrow { in_types = [t; t]; out_type = c_bool })
+let ltb t = Var ("<?", Tarrow { in_types = [t; t]; out_type = c_bool })
+
+let b_true = Var ("true", c_bool)
+let b_false = Var ("false", c_bool)
+let prop_true = Var ("True", TProp)
+let prop_false = Var ("False", TProp)
 
 (* pretty printing of formulas *)
 (* - p: the function that outputs a string *)
 (* - k: continuation *)
 
 (* operators that must be printed in infix notation *)
-let infix = ["->"; "="; "<"; "*"; "+"]
+let infix = ["->"; "="; "<"; "*"; "+"; "-->"; "=?"; "<?"]
 
 let rec pprint_list p k = function
   | [] -> k ()
@@ -115,7 +125,55 @@ let rec typecheck = function
 
 (* our algorithm *)
 
-let translate form = form
+module CFormulaMap = Map.Make (
+  struct
+    type t = c_formula
+    let compare = Stdlib.compare
+  end)
+
+let logic_translations = CFormulaMap.of_seq (List.to_seq
+  [ (b_true, prop_true);
+    (b_false, prop_false);
+    (implb, impl);
+    (ltb c_int, lt c_int);
+    (eqb c_int, eq c_int);
+    (eqb c_T, eq c_T) ])
+
+let rec translate_logic = function
+  | Var (x, t) as var -> begin
+    match CFormulaMap.find_opt var logic_translations with
+    | None -> var
+    | Some var' -> var'
+  end
+  | App (f, args) as app -> begin
+    match CFormulaMap.find_opt f logic_translations with
+    | None -> app
+    | Some f' -> App (f', List.map translate_logic args)
+  end
+
+type morphism =
+  { morph_in_type: c_type
+  ; morph_out_type: c_type
+  ; morph_name: string
+  }
+
+let known_morphisms =
+  [ { morph_in_type = c_int; morph_out_type = c_Z; morph_name = "Z_of_int" };
+    { morph_in_type = c_Z; morph_out_type = c_int; morph_name = "int_of_Z" } ]
+
+let c_formula_of_morphism { morph_in_type; morph_out_type; morph_name } =
+  Var (morph_name, Tarrow { in_types = [morph_in_type]; out_type = morph_out_type })
+
+let inject t' = function
+  | Var (x, t) as var -> begin
+    match List.find_opt (fun m -> m.morph_in_type = t && m.morph_out_type = t') known_morphisms with
+    | None -> Error (Printf.sprintf
+      "cannot inject %s into %s: no morphism found" (string_of_c_type t) (string_of_c_type t'))
+    | Some m -> Ok (App (c_formula_of_morphism m, [var]))
+  end
+  | App (f, fs) -> (* todo *)
+
+let translate form = translate_logic form
 
 (* test *)
 
@@ -129,8 +187,8 @@ let () =
     let g = Var ("g", Tarrow { in_types = [c_int]; out_type = c_int }) in
     let h = Var ("h", Tarrow { in_types = [c_int]; out_type = c_nat }) in
     let w = Var ("w", Tarrow { in_types = [c_nat]; out_type = c_T }) in
-    App (impl, [
-      App (lt c_int, [
+    App (implb, [
+      App (ltb c_int, [
         x;
         App (mul c_int, [
           y;
@@ -138,11 +196,18 @@ let () =
             App (add c_int, [
               one;
               App (f, [App (add c_int, [x; y])])])])])]);
-      App (eq c_T, [
+      App (eqb c_T, [
         App (w, [App (h, [x])]);
         App (w, [App (h, [App (f, [App (add c_int, [y; zero])])])])])])
   in
   pprint (fun () -> ()) form;
-  match typecheck form with
-  | Ok t -> Printf.printf " : %s\n" (string_of_c_type t)
-  | Error f -> print_endline "\nType error: "; f ()
+  let () =
+    match typecheck form with
+    | Ok t -> Printf.printf " : %s\n" (string_of_c_type t)
+    | Error f -> print_endline "\nType error: "; f ()
+  in
+  let form' = translate form in
+  pprint (fun () -> ()) form';
+  match typecheck form' with
+    | Ok t -> Printf.printf " : %s\n" (string_of_c_type t)
+    | Error f -> print_endline "\nType error: "; f ()
