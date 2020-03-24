@@ -49,26 +49,33 @@ let c_T = Tname "T"
 let c_bool = Tname "bool"
 
 let impl = Var ("->", Tarrow { in_types = [TProp; TProp]; out_type = TProp })
-let eq t = Var ("=", Tarrow { in_types = [t; t]; out_type = TProp })
-let lt t = Var ("<", Tarrow { in_types = [t; t]; out_type = TProp })
-let mul t = Var ("*", Tarrow { in_types = [t; t]; out_type = t })
-let add t = Var ("+", Tarrow { in_types = [t; t]; out_type = t })
+let c_and = Var ("/\\", Tarrow { in_types = [TProp; TProp]; out_type = TProp })
+let c_or = Var ("\\/", Tarrow { in_types = [TProp; TProp]; out_type = TProp })
+let c_not = Var ("~", Tarrow { in_types = [TProp]; out_type = TProp })
 
 let implb = Var ("-->", Tarrow { in_types = [c_bool; c_bool]; out_type = c_bool })
+let andb = Var ("&&", Tarrow { in_types = [c_bool; c_bool]; out_type = c_bool })
+let orb = Var ("||", Tarrow { in_types = [c_bool; c_bool]; out_type = c_bool })
+let negb = Var ("~~", Tarrow { in_types = [c_bool]; out_type = c_bool })
+
+let eq t = Var ("=", Tarrow { in_types = [t; t]; out_type = TProp })
+let lt t = Var ("<", Tarrow { in_types = [t; t]; out_type = TProp })
+
 let eqb t = Var ("=?", Tarrow { in_types = [t; t]; out_type = c_bool })
 let ltb t = Var ("<?", Tarrow { in_types = [t; t]; out_type = c_bool })
 
+let mul t = Var ("*", Tarrow { in_types = [t; t]; out_type = t })
+let add t = Var ("+", Tarrow { in_types = [t; t]; out_type = t })
+
 let b_true = Var ("true", c_bool)
 let b_false = Var ("false", c_bool)
-let prop_true = Var ("True", TProp)
-let prop_false = Var ("False", TProp)
 
 (* pretty printing of formulas *)
 (* - p: the function that outputs a string *)
 (* - k: continuation *)
 
 (* operators that must be printed in infix notation *)
-let infix = ["->"; "="; "<"; "*"; "+"; "-->"; "=?"; "<?"]
+let infix = ["->"; "="; "<"; "*"; "+"; "-->"; "=?"; "<?"; "/\\"; "\\/"; "~"; "&&"; "||"; "~~"]
 
 let rec pprint_list p k = function
   | [] -> k ()
@@ -123,33 +130,76 @@ let rec typecheck = function
     (* f does not typecheck *)
     | error -> error
 
-(* our algorithm *)
+(* our algorithms *)
 
+(* formula to formula map to store associations *)
 module CFormulaMap = Map.Make (
   struct
     type t = c_formula
     let compare = Stdlib.compare
   end)
 
+(* logical connectors in bool and their equivalents in Prop *)
+(* they all take bool arguments so translating them means translating the arguments *)
 let logic_translations = CFormulaMap.of_seq (List.to_seq
-  [ (b_true, prop_true);
-    (b_false, prop_false);
-    (implb, impl);
-    (ltb c_int, lt c_int);
+  [ (implb, impl);
+    (negb, c_not);
+    (andb, c_and);
+    (orb, c_or) ])
+
+(* boolean relations and their equivalents in Prop *)
+let boolean_translations = CFormulaMap.of_seq (List.to_seq
+  [ (ltb c_int, lt c_int);
     (eqb c_int, eq c_int);
+    (eqb c_bool, eq c_bool);
     (eqb c_T, eq c_T) ])
 
-let rec translate_logic = function
-  | Var (x, t) as var -> begin
-    match CFormulaMap.find_opt var logic_translations with
-    | None -> var
-    | Some var' -> var'
-  end
-  | App (f, args) as app -> begin
+let rec bool_to_Prop = function
+  (* boolean variable, just add `= true` *)
+  | Var (_, t) as var when t = c_bool -> App (eq c_bool, [var; b_true])
+  (* other variables *)
+  | Var _ as var -> var
+  (* function application *)
+  | App (f, args) as app ->
     match CFormulaMap.find_opt f logic_translations with
-    | None -> app
-    | Some f' -> App (f', List.map translate_logic args)
-  end
+    (* f is a logical connector, we translate it and its arguments *)
+    | Some f' -> App (f', List.map bool_to_Prop args)
+    (* f is not a logical connector, now we check if it is a boolean relation *)
+    | None ->
+      match CFormulaMap.find_opt f boolean_translations with
+      (* f is a boolean relation associated to f' in Prop *)
+      | Some f' -> App (f', args)
+      (* f is an ordinary function, we change nothing *)
+      | None -> app
+
+let f1 =
+  let x = Var ("x", c_int) in
+  let y = Var ("y", c_int) in
+  let z = Var ("z", c_int) in
+  let b1 = Var ("b1", c_bool) in
+  let b2 = Var ("b2", c_bool) in
+  let one = Var ("1", c_int) in
+  let f = Var ("f", Tarrow { in_types = [c_int]; out_type = c_bool }) in
+  App (implb, [
+    App (negb, [App (ltb c_int, [x; z])]);
+    App (orb, [
+      App (eqb c_int, [App (add c_int, [one; y]); z]);
+      App (andb, [b1; App (eqb c_bool, [App (f, [x]); b2])])])])
+
+let test_f1 () =
+  print_string "f1 = ";
+  pprint (fun () -> ()) f1;
+  let () =
+    match typecheck f1 with
+    | Ok t -> Printf.printf " : %s\n" (string_of_c_type t)
+    | Error f -> print_string "\nType error: "; f ()
+  in
+  let f1' = bool_to_Prop f1 in
+  print_string "bool_to_Prop f1 = ";
+  pprint (fun () -> ()) f1';
+  match typecheck f1' with
+  | Ok t -> Printf.printf " : %s\n" (string_of_c_type t)
+  | Error f -> print_string "\nType error: "; f ()
 
 type morphism =
   { morph_in_type: c_type
@@ -164,6 +214,10 @@ let known_morphisms =
 let c_formula_of_morphism { morph_in_type; morph_out_type; morph_name } =
   Var (morph_name, Tarrow { in_types = [morph_in_type]; out_type = morph_out_type })
 
+let arith_translations = CFormulaMap.of_seq (List.to_seq
+  [ (lt c_int, lt c_Z);
+    (eq c_int, eq c_Z) ])
+(* 
 let inject t' = function
   | Var (x, t) as var -> begin
     match List.find_opt (fun m -> m.morph_in_type = t && m.morph_out_type = t') known_morphisms with
@@ -171,13 +225,27 @@ let inject t' = function
       "cannot inject %s into %s: no morphism found" (string_of_c_type t) (string_of_c_type t'))
     | Some m -> Ok (App (c_formula_of_morphism m, [var]))
   end
-  | App (f, fs) -> (* todo *)
+  | App (f, fs) ->
+    match CFormulaMap.find_opt f arith_translations with
+    | None -> Error  (Printf.sprintf "cannot inject %s: "
+    | Some f' ->
+  
+  
+  Error "the term to inject is not a variable" *)
 
-let translate form = translate_logic form
+(*
+O -> 0
+x -> TofZ ZofT x ->
+op x y z -> op' (ZofT x) (ZofT y) (ZofT z)
+f x y z -> f (TofZ ZofT x) (TofZ ZofT y) (TofZ ZofT z) -> 
+*)
+
+let translate form = form
 
 (* test *)
 
 let () =
+  test_f1 ();
   let form =
     let x = Var ("x", c_int) in
     let y = Var ("y", c_int) in
@@ -204,10 +272,10 @@ let () =
   let () =
     match typecheck form with
     | Ok t -> Printf.printf " : %s\n" (string_of_c_type t)
-    | Error f -> print_endline "\nType error: "; f ()
+    | Error f -> print_string "\nType error: "; f ()
   in
   let form' = translate form in
   pprint (fun () -> ()) form';
   match typecheck form' with
     | Ok t -> Printf.printf " : %s\n" (string_of_c_type t)
-    | Error f -> print_endline "\nType error: "; f ()
+    | Error f -> print_string "\nType error: "; f ()
