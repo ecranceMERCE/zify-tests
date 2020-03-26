@@ -201,11 +201,15 @@ let c_formula_of_morphism { from_type; to_type; name } =
   Var (name, Tarrow { in_types = [from_type]; out_type = to_type })
 
 (* known functions and their equivalents in Z *)
-let arith_translations = CFormulaMap.of_seq (List.to_seq
-  [ (mul c_int, mul c_Z);
-    (add c_int, add c_Z);
-    (lt c_int, lt c_Z);
-    (eq c_int, eq c_Z) ])
+let arith_translations =
+  let h = Hashtbl.create 17 in
+  Hashtbl.add_seq h (List.to_seq
+    [ (mul c_int, mul c_Z);
+      (add c_int, add c_Z);
+      (lt c_int, lt c_Z);
+      (eq c_int, eq c_Z) ]
+  );
+  h
 
 (* injection function looking for a morphism from t_src to t_dest and applying it to form *)
 let inject_with_morphism t_src t_dest form =
@@ -218,48 +222,8 @@ let inject_with_morphism t_src t_dest form =
     let () = Printf.printf "injecting %s into %s by morphism %s\n" (pprint_to_str false form) (string_of_c_type t_dest) m.name in
     Ok (App (c_formula_of_morphism m, [form]))
 
-(* injection function replacing sub-trees starting with  *)
-let rec inject_lia (uninterpreted_table, fresh_counter) t = function
-  (* the variable is already in t *)
-  | Var (_, t') as var when t' = t ->
-    let () = Printf.printf "var %s is already in %s\n" (pprint_to_str false var) (string_of_c_type t) in
-    Ok var
-  (* the variable is not in t *)
-  | Var (_, t') as var -> inject_with_morphism t' t var
-  (* function application *)
-  | App (f, fs) as app ->
-    match CFormulaMap.find_opt f arith_translations with
-    (* f is a relation between integers *)
-    | Some f' -> begin
-      let () = Printf.printf "%s is an integer relation\n" (pprint_to_str false f) in
-      match typecheck f, typecheck f' with
-      | Ok (Tarrow tf), Ok (Tarrow tf') -> begin
-        let inject_arg (form, form_type, form_expected_type) =
-          if form_type = form_expected_type then Ok form
-          else inject_lia (uninterpreted_table, fresh_counter) form_expected_type form
-        in
-        let* injected_args = mapM inject_arg (combine3 fs tf.in_types tf'.in_types) in
-        Ok (App (f', injected_args))
-      end
-      | _ -> failwith "the formula to translate is not well-typed"
-    end
-    (* f is unknown *)
-    | None ->
-      let* t_app = typecheck app in
-      match Hashtbl.find_opt uninterpreted_table app with
-      | Some form -> Ok form
-      | None ->
-        let name = "v" ^ string_of_int !fresh_counter in
-        incr fresh_counter;
-        let* form =
-          if t_app = t then Ok (Var (name, t_app))
-          else inject_with_morphism t_app t (Var (name, t_app))
-        in
-        Hashtbl.add uninterpreted_table app form;
-        Ok form
-
-(* injection function looking for everything it can inject into type t, even under uninterpreted values *)
-let rec inject t = function
+(* injection function *)
+let rec injection inject_unknown t = function
   (* the variable is already in t *)
   | Var (_, t') as var when t' = t ->
     let () = Printf.printf "var %s is already in %s\n" (pprint_to_str false var) (string_of_c_type t) in
@@ -268,59 +232,99 @@ let rec inject t = function
   | Var (_, t') as var -> inject_with_morphism t' t var
   (* function application *)
   | App (f, fs) ->
-    match CFormulaMap.find_opt f arith_translations with
+    (* TODO : maybe use a graph data structure to allow several-step injections *)
+    (* currently taking the first possible translation that has t as output_type... *)
+    let type_filter f' =
+      match typecheck f' with
+      | Ok t' when t' = t -> Some f'
+      | _ -> None
+    in
+    match List.nth_opt (List.filter_map type_filter @@ Hashtbl.find_all arith_translations f) 0 with
+    (* f is unknown *)
+    | None -> inject_unknown t (f, fs)
     (* f is a relation between integers *)
-    | Some f' -> begin
+    | Some f' ->
       let () = Printf.printf "%s is an integer relation\n" (pprint_to_str false f) in
+      (* we need to check which injections must be done *)
+      (* from the input and output types of f to the input and output types of f' *)
       match typecheck f, typecheck f' with
-      | Ok (Tarrow tf), Ok (Tarrow tf') -> begin
+      | Ok (Tarrow tf), Ok (Tarrow tf') ->
+        (* injecting only if needed *)
         let inject_arg (form, form_type, form_expected_type) =
           if form_type = form_expected_type then Ok form
-          else inject form_expected_type form
+          else injection inject_unknown form_expected_type form
         in
+        (* injecting all the arguments *)
         let* injected_args = mapM inject_arg (combine3 fs tf.in_types tf'.in_types) in
-        Ok (App (f', injected_args))
-      end
-      | _ -> failwith "the formula to translate is not well-typed"
-    end
-    (* f is unknown *)
-    | None ->
-      let* tf = typecheck f in
-      match tf with
-      | Tarrow { in_types; out_type } -> begin
-        let inject_arg (form, form_type) =
-          if form_type = t then Ok form else
-          let* i = inject t form in
-          inject_with_morphism t out_type i
-        in
-        let* injected_args = mapM inject_arg (List.combine fs in_types) in
-        if out_type = t then
-          (* the output type is already t, no further injection needed *)
-          Ok (App (f, injected_args))
-        else inject_with_morphism out_type t (App (f, injected_args))
-      end
+        (* injecting the result if needed *)
+        if tf.out_type = tf'.out_type then Ok (App (f', injected_args))
+        else inject_with_morphism tf.out_type tf'.out_type (App (f', injected_args))
       | _ -> failwith "the formula to translate is not well-typed"
 
+(* injection function for unknown applications, creating new variables to replace the whole sub-tree *)
+let inject_unknown_lia (uninterpreted_table, fresh_counter) t (f, fs) =
+  let app = App (f, fs) in
+  let* t_app = typecheck app in
+  match Hashtbl.find_opt uninterpreted_table app with
+  (* the unknown function is in the table *)
+  | Some form -> Ok form
+  (* it is missing from the table *)
+  | None ->
+    (* new identifier *)
+    let name = "v" ^ string_of_int !fresh_counter in
+    incr fresh_counter;
+    let* form =
+      (* adding a morphism injection if needed before storing the translation in the table *)
+      if t_app = t then Ok (Var (name, t_app))
+      else inject_with_morphism t_app t (Var (name, t_app))
+    in
+    (* memoisation before returning form *)
+    Hashtbl.add uninterpreted_table app form;
+    Ok form
+
+(* injection function for unknown applications, looking for everything in the sub-tree that can be injected into type t *)
+let rec inject_unknown_full t (f, fs) =
+  let get_types = function
+    | Tarrow { in_types; out_type } -> Ok (in_types, out_type)
+    | _ -> Error "the unknown formula to inject is not a function"
+  in
+  let* tf = (typecheck f) in
+  let* (in_types, out_type) = get_types tf in
+  let inject_arg (form, form_type) =
+    if form_type = t then Ok form else
+    (* we inject the argument, then inject it back with a morphism for f to typecheck correctly *)
+    let* i = injection inject_unknown_full t form in
+    inject_with_morphism t out_type i
+  in
+  let* injected_args = mapM inject_arg (List.combine fs in_types) in
+  if out_type = t then
+    (* the output type is already t, no further injection needed *)
+    Ok (App (f, injected_args))
+  else inject_with_morphism out_type t (App (f, injected_args))
+
+type uninterpreted_terms_internal = Lia of (c_formula, c_formula) Hashtbl.t * int ref | Full
+type uninterpreted_terms_strategy = LiaStrategy | FullStrategy
+
 (* translation function from integers to Z *)
-let rec integers_to_Z uninterpreted_table_opt = function
+let rec integers_to_Z uninterpreted_data = function
   (* if the formula is just a logical variable, we do nothing *)
   | Var _ as var -> var
   (* the formula is an application (we are in this case very often) *)
   | App (f, fs) as app ->
     if List.mem f logical_connectors then
       (* f is a logical connector, we just propagate the translation to the formulas below *)
-      App (f, List.map (integers_to_Z uninterpreted_table_opt) fs)
+      App (f, List.map (integers_to_Z uninterpreted_data) fs)
     else
     (* f is either a logical relation with integers or an unknown function *)
     (* that might take integers at the bottom of the AST *)
     (* in both cases, we arrived to the logical leaves, we switch to the arithmetic injection *)
-    let inj =
+    let inject_unknown =
       (* the injection function is different according to the strategy (handle uninterpreted terms or not) *)
-      match uninterpreted_table_opt with
-      | Some table -> inject_lia (table, ref 0)
-      | None -> inject
+      match uninterpreted_data with
+      | Lia (table, counter) -> inject_unknown_lia (table, counter)
+      | Full -> inject_unknown_full
     in
-    match inj c_Z app with
+    match injection inject_unknown c_Z app with
     | Ok app' -> app'
     | Error e -> (print_endline e; app)
 
@@ -331,13 +335,15 @@ op x y z -> op' (ZofT x) (ZofT y) (ZofT z)
 f x y z -> f (TofZ ZofT x) (TofZ ZofT y) (TofZ ZofT z) -> 
 *)
 
-let translate handle_uninterpreted form =
+let translate uninterpreted_terms_strategy form =
+  let uninterpreted_data =
+    match uninterpreted_terms_strategy with
+    | LiaStrategy -> Lia (Hashtbl.create 17, ref 0)
+    | FullStrategy -> Full
+  in
   form
   |> bool_to_Prop
-  |> integers_to_Z (if handle_uninterpreted then Some (Hashtbl.create 17) else None)
-
-let translate_lia form = translate true form
-let translate form = translate false form
+  |> integers_to_Z uninterpreted_data
 
 (* test *)
 
@@ -394,10 +400,64 @@ let f3 =
   ])
 
 (*
+forall (x y : T) (f : T -> U) (g : U -> int),
+  g (f x) + g (f y) = g (f y) + g (f x).
+*)
+let f4 =
+  let x = Var ("x", Tname "T") in
+  let y = Var ("y", Tname "T") in
+  let f = Var ("f", Tarrow { in_types = [Tname "T"]; out_type = Tname "U" }) in
+  let g = Var ("g", Tarrow { in_types = [Tname "U"]; out_type = c_int }) in
+  App (eq c_int, [
+    App (add c_int, [
+      App (g, [App (f, [x])]);
+      App (g, [App (f, [y])])]);
+    App (add c_int, [
+      App (g, [App (f, [y])]);
+      App (g, [App (f, [x])])])])
+
+(*
+forall (x y : T) (f : T -> int) (g : int -> V) (h : V -> int),
+  h (g ((f x) + (f y))) + 0 = h (g ((f y) + (f x) + 0)).
+*)
+let f5 =
+  let x = Var ("x", Tname "T") in
+  let y = Var ("y", Tname "T") in
+  let zero = Var ("0", c_int) in
+  let f = Var ("f", Tarrow { in_types = [Tname "T"]; out_type = c_int }) in
+  let g = Var ("g", Tarrow { in_types = [c_int]; out_type = Tname "V" }) in
+  let h = Var ("h", Tarrow { in_types = [Tname "V"]; out_type = c_int }) in
+  App (eq c_int, [
+    App (add c_int, [
+      App (h, [App (g, [App (add c_int, [App (f, [x]); App (f, [y])])])]);
+      zero]);
+    App (h, [App (g, [
+      App (add c_int, [
+        App (add c_int, [App (f, [y]); App (f, [x])]);
+        zero])])])])
+
+(*
+forall (x y : int) (f : int -> U) (g : U -> V) (h : V -> int),
+  0 + h (g (f (x + y))) = 0.
+*)
+let f6 =
+  let x = Var ("x", c_int) in
+  let y = Var ("y", c_int) in
+  let zero = Var ("0", c_int) in
+  let f = Var ("f", Tarrow { in_types = [c_int]; out_type = Tname "U" }) in
+  let g = Var ("g", Tarrow { in_types = [Tname "U"]; out_type = Tname "V" }) in
+  let h = Var ("h", Tarrow { in_types = [Tname "V"]; out_type = c_int }) in
+  App (eq c_int, [
+    App (add c_int, [
+      zero;
+      App (h, [App (g, [App (f, [App (add c_int, [x; y])])])])]);
+    zero])
+
+(*
 forall (x y : int) (f : int -> int) (g : int -> int) (h : int -> nat) (w : nat -> T),
   x <? y * g (1 + f (x + y)) --> w (h x) =? w (h (f (y + 0))).
 *)
-let f4 =
+let f7 =
   let x = Var ("x", c_int) in
   let y = Var ("y", c_int) in
   let zero = Var ("0", c_int) in
@@ -418,43 +478,6 @@ let f4 =
     App (eqb c_T, [
       App (w, [App (h, [x])]);
       App (w, [App (h, [App (f, [App (add c_int, [y; zero])])])])])])
-
-(*
-forall (x y : T) (f : T -> U) (g : U -> int),
-  g (f x) + g (f y) = g (f y) + g (f x).
-*)
-let f5 =
-  let x = Var ("x", Tname "T") in
-  let y = Var ("y", Tname "T") in
-  let f = Var ("f", Tarrow { in_types = [Tname "T"]; out_type = Tname "U" }) in
-  let g = Var ("g", Tarrow { in_types = [Tname "U"]; out_type = c_int }) in
-  App (eq c_int, [
-    App (add c_int, [
-      App (g, [App (f, [x])]);
-      App (g, [App (f, [y])])]);
-    App (add c_int, [
-      App (g, [App (f, [y])]);
-      App (g, [App (f, [x])])])])
-
-(*
-forall (x y : T) (f : T -> int) (g : int -> V) (h : V -> int),
-  h (g ((f x) + (f y))) + 0 = h (g ((f y) + (f x) + 0)).
-*)
-let f6 =
-  let x = Var ("x", Tname "T") in
-  let y = Var ("y", Tname "T") in
-  let zero = Var ("0", c_int) in
-  let f = Var ("f", Tarrow { in_types = [Tname "T"]; out_type = c_int }) in
-  let g = Var ("g", Tarrow { in_types = [c_int]; out_type = Tname "V" }) in
-  let h = Var ("h", Tarrow { in_types = [Tname "V"]; out_type = c_int }) in
-  App (eq c_int, [
-    App (add c_int, [
-      App (h, [App (g, [App (add c_int, [App (f, [x]); App (f, [y])])])]);
-      zero]);
-    App (h, [App (g, [
-      App (add c_int, [
-        App (add c_int, [App (f, [y]); App (f, [x])]);
-        zero])])])])
 
 let test (name, form) =
   begin
@@ -488,23 +511,6 @@ let test (name, form) =
   end
   |> Result.iter_error (Printf.printf "\nType error: %s\n")
 
-(*
-forall (x y : int) (f : int -> U) (g : U -> V) (h : V -> int),
-  0 + h (g (f (x + y))) = 0.
-*)
-let f7 =
-  let x = Var ("x", c_int) in
-  let y = Var ("y", c_int) in
-  let zero = Var ("0", c_int) in
-  let f = Var ("f", Tarrow { in_types = [c_int]; out_type = Tname "U" }) in
-  let g = Var ("g", Tarrow { in_types = [Tname "U"]; out_type = Tname "V" }) in
-  let h = Var ("h", Tarrow { in_types = [Tname "V"]; out_type = c_int }) in
-  App (eq c_int, [
-    App (add c_int, [
-      zero;
-      App (h, [App (g, [App (f, [App (add c_int, [x; y])])])])]);
-    zero])
-
 let () =
-  let test_cases = [f1; f2; f3; f4; f5; f6; f7] in
+  let test_cases = [f1; (* f2; f3; f4; f5; f6; f7 *)] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
