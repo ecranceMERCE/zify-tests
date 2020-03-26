@@ -282,6 +282,8 @@ let inject_unknown_lia (uninterpreted_table, fresh_counter) t (f, fs) =
     Hashtbl.add uninterpreted_table app form;
     Ok form
 
+let exists_morphism t t' = List.exists (fun m -> m.from_type = t && m.to_type = t') known_morphisms
+
 (* injection function for unknown applications, looking for everything in the sub-tree that can be injected into type t *)
 let rec inject_unknown_full t (f, fs) =
   let get_types = function
@@ -291,10 +293,11 @@ let rec inject_unknown_full t (f, fs) =
   let* tf = (typecheck f) in
   let* (in_types, out_type) = get_types tf in
   let inject_arg (form, form_type) =
-    if form_type = t then Ok form else
+    (* if the argument is already of type t, or if there isn't two morphisms between both types *)
+    if form_type = t || not (exists_morphism form_type t && exists_morphism t form_type) then Ok form else
     (* we inject the argument, then inject it back with a morphism for f to typecheck correctly *)
     let* i = injection inject_unknown_full t form in
-    inject_with_morphism t out_type i
+    inject_with_morphism t form_type i
   in
   let* injected_args = mapM inject_arg (List.combine fs in_types) in
   if out_type = t then
@@ -327,6 +330,8 @@ let rec integers_to_Z uninterpreted_data = function
     match injection inject_unknown c_Z app with
     | Ok app' -> app'
     | Error e -> (print_endline e; app)
+
+    (* TODO : predicates on unknown and non integer types? *)
 
 (*
 O -> 0
