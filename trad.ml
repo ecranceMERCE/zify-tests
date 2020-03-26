@@ -137,6 +137,12 @@ let rec typecheck = function
     (* f does not typecheck *)
     | error -> error
 
+let typecheck_function f =
+  let* t = typecheck f in
+  match t with
+  | Tarrow { out_type; _ } -> Ok out_type
+  | _ -> Ok t
+
 (* our algorithms *)
 
 (* formula to formula map to store associations *)
@@ -225,9 +231,7 @@ let inject_with_morphism t_src t_dest form =
 (* injection function *)
 let rec injection inject_unknown t = function
   (* the variable is already in t *)
-  | Var (_, t') as var when t' = t ->
-    let () = Printf.printf "var %s is already in %s\n" (pprint_to_str false var) (string_of_c_type t) in
-    Ok var
+  | Var (_, t') as var when t' = t -> Ok var
   (* the variable is not in t *)
   | Var (_, t') as var -> inject_with_morphism t' t var
   (* function application *)
@@ -235,13 +239,13 @@ let rec injection inject_unknown t = function
     (* TODO : maybe use a graph data structure to allow several-step injections *)
     (* currently taking the first possible translation that has t as output_type... *)
     let type_filter f' =
-      match typecheck f' with
-      | Ok t' when t' = t -> Some f'
+      match typecheck_function f' with
+      | Ok t' when t' = t || t' = TProp -> Some f'
       | _ -> None
     in
     match List.nth_opt (List.filter_map type_filter @@ Hashtbl.find_all arith_translations f) 0 with
     (* f is unknown *)
-    | None -> inject_unknown t (f, fs)
+    | None -> (Printf.printf "unknown term %s\n" (pprint_to_str true f); inject_unknown t (f, fs))
     (* f is a relation between integers *)
     | Some f' ->
       let () = Printf.printf "%s is an integer relation\n" (pprint_to_str false f) in
@@ -257,8 +261,8 @@ let rec injection inject_unknown t = function
         (* injecting all the arguments *)
         let* injected_args = mapM inject_arg (combine3 fs tf.in_types tf'.in_types) in
         (* injecting the result if needed *)
-        if tf.out_type = tf'.out_type then Ok (App (f', injected_args))
-        else inject_with_morphism tf.out_type tf'.out_type (App (f', injected_args))
+        if tf'.out_type = t || tf'.out_type = TProp then Ok (App (f', injected_args))
+        else inject_with_morphism tf'.out_type t (App (f', injected_args))
       | _ -> failwith "the formula to translate is not well-typed"
 
 (* injection function for unknown applications, creating new variables to replace the whole sub-tree *)
@@ -275,7 +279,9 @@ let inject_unknown_lia (uninterpreted_table, fresh_counter) t (f, fs) =
     incr fresh_counter;
     let* form =
       (* adding a morphism injection if needed before storing the translation in the table *)
-      if t_app = t then Ok (Var (name, t_app))
+      (* if the function to inject has output type Prop, then we are at the top of the subtree, *)
+      (* thus we do not translate the output type *)
+      if t_app = t || t_app = TProp then Ok (Var (name, t_app))
       else inject_with_morphism t_app t (Var (name, t_app))
     in
     (* memoisation before returning form *)
@@ -300,8 +306,9 @@ let rec inject_unknown_full t (f, fs) =
     inject_with_morphism t form_type i
   in
   let* injected_args = mapM inject_arg (List.combine fs in_types) in
-  if out_type = t then
+  if out_type = t || out_type = TProp then
     (* the output type is already t, no further injection needed *)
+    (* or the output type is Prop, we are at the top of the subtree, we do not translate anything *)
     Ok (App (f, injected_args))
   else inject_with_morphism out_type t (App (f, injected_args))
 
@@ -499,13 +506,13 @@ let test (name, form) =
     Printf.printf " : %s\n\n" (string_of_c_type t');
 
     print_endline "==[ translate_lia ]==";
-    let form'' = translate_lia form in
+    let form'' = translate LiaStrategy form in
     pprint_formula false form'';
     let* t'' = typecheck form'' in
     Printf.printf " : %s\n\n" (string_of_c_type t'');
 
     print_endline "==[ translate ]==";
-    let form''' = translate form in
+    let form''' = translate FullStrategy form in
     pprint_formula false form''';
     let* t''' = typecheck form''' in
     Printf.printf " : %s\n\n" (string_of_c_type t''');
@@ -517,5 +524,5 @@ let test (name, form) =
   |> Result.iter_error (Printf.printf "\nType error: %s\n")
 
 let () =
-  let test_cases = [f1; (* f2; f3; f4; f5; f6; f7 *)] in
+  let test_cases = [f1; f2; f3; f4; f5; f6; f7] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
