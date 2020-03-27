@@ -217,145 +217,120 @@ let arith_translations =
   );
   h
 
-(* injection function looking for a morphism from t_src to t_dest and applying it to form *)
-let inject_with_morphism t_src t_dest form =
-  match List.find_opt (fun m -> m.from_type = t_src && m.to_type = t_dest) known_morphisms with
-  (* there is no morphism from t_src to t_dest *)
-  | None -> Error (Printf.sprintf
-    "cannot inject %s into %s: no morphism found" (string_of_c_type t_src) (string_of_c_type t_dest))
-  (* there is a morphism, we can apply it *)
-  | Some m ->
-    let () = Printf.printf "injecting %s into %s by morphism %s\n" (pprint_to_str false form) (string_of_c_type t_dest) m.name in
-    Ok (App (c_formula_of_morphism m, [form]))
-
-(* injection function *)
-let rec injection inject_unknown t = function
-  (* the variable is already in t *)
-  | Var (_, t') as var when t' = t -> Ok var
-  (* the variable is not in t *)
-  | Var (_, t') as var -> inject_with_morphism t' t var
-  (* function application *)
-  | App (f, fs) ->
-    (* TODO : maybe use a graph data structure to allow several-step injections *)
-    (* currently taking the first possible translation that has t as output_type... *)
-    let type_filter f' =
-      match typecheck_function f' with
-      | Ok t' when t' = t || t' = TProp -> Some f'
-      | _ -> None
-    in
-    match List.nth_opt (List.filter_map type_filter @@ Hashtbl.find_all arith_translations f) 0 with
-    (* f is unknown *)
-    | None -> (Printf.printf "unknown term %s\n" (pprint_to_str true f); inject_unknown t (f, fs))
-    (* f is a relation between integers *)
-    | Some f' ->
-      let () = Printf.printf "%s is an integer relation\n" (pprint_to_str false f) in
-      (* we need to check which injections must be done *)
-      (* from the input and output types of f to the input and output types of f' *)
-      match typecheck f, typecheck f' with
-      | Ok (Tarrow tf), Ok (Tarrow tf') ->
-        (* injecting only if needed *)
-        let inject_arg (form, form_type, form_expected_type) =
-          if form_type = form_expected_type then Ok form
-          else injection inject_unknown form_expected_type form
-        in
-        (* injecting all the arguments *)
-        let* injected_args = mapM inject_arg (combine3 fs tf.in_types tf'.in_types) in
-        (* injecting the result if needed *)
-        if tf'.out_type = t || tf'.out_type = TProp then Ok (App (f', injected_args))
-        else inject_with_morphism tf'.out_type t (App (f', injected_args))
-      | _ -> failwith "the formula to translate is not well-typed"
-
-(* injection function for unknown applications, creating new variables to replace the whole sub-tree *)
-let inject_unknown_lia (uninterpreted_table, fresh_counter) t (f, fs) =
-  let app = App (f, fs) in
-  let* t_app = typecheck app in
-  match Hashtbl.find_opt uninterpreted_table app with
-  (* the unknown function is in the table *)
-  | Some form -> Ok form
-  (* it is missing from the table *)
-  | None ->
-    (* new identifier *)
-    let name = "v" ^ string_of_int !fresh_counter in
-    incr fresh_counter;
-    let* form =
-      (* adding a morphism injection if needed before storing the translation in the table *)
-      (* if the function to inject has output type Prop, then we are at the top of the subtree, *)
-      (* thus we do not translate the output type *)
-      if t_app = t || t_app = TProp then Ok (Var (name, t_app))
-      else inject_with_morphism t_app t (Var (name, t_app))
-    in
-    (* memoisation before returning form *)
-    Hashtbl.add uninterpreted_table app form;
-    Ok form
-
-let exists_morphism t t' = List.exists (fun m -> m.from_type = t && m.to_type = t') known_morphisms
-
-(* injection function for unknown applications, looking for everything in the sub-tree that can be injected into type t *)
-let rec inject_unknown_full t (f, fs) =
-  let get_types = function
-    | Tarrow { in_types; out_type } -> Ok (in_types, out_type)
-    | _ -> Error "the unknown formula to inject is not a function"
-  in
-  let* tf = (typecheck f) in
-  let* (in_types, out_type) = get_types tf in
-  let inject_arg (form, form_type) =
-    (* if the argument is already of type t, or if there isn't two morphisms between both types *)
-    if form_type = t || not (exists_morphism form_type t && exists_morphism t form_type) then Ok form else
-    (* we inject the argument, then inject it back with a morphism for f to typecheck correctly *)
-    let* i = injection inject_unknown_full t form in
-    inject_with_morphism t form_type i
-  in
-  let* injected_args = mapM inject_arg (List.combine fs in_types) in
-  if out_type = t || out_type = TProp then
-    (* the output type is already t, no further injection needed *)
-    (* or the output type is Prop, we are at the top of the subtree, we do not translate anything *)
-    Ok (App (f, injected_args))
-  else inject_with_morphism out_type t (App (f, injected_args))
-
 type uninterpreted_terms_internal = Lia of (c_formula, c_formula) Hashtbl.t * int ref | Full
-type uninterpreted_terms_strategy = LiaStrategy | FullStrategy
 
-(* translation function from integers to Z *)
-let rec integers_to_Z uninterpreted_data = function
-  (* if the formula is just a logical variable, we do nothing *)
-  | Var _ as var -> var
-  (* the formula is an application (we are in this case very often) *)
-  | App (f, fs) as app ->
-    if List.mem f logical_connectors then
-      (* f is a logical connector, we just propagate the translation to the formulas below *)
-      App (f, List.map (integers_to_Z uninterpreted_data) fs)
-    else
-    (* f is either a logical relation with integers or an unknown function *)
-    (* that might take integers at the bottom of the AST *)
-    (* in both cases, we arrived to the logical leaves, we switch to the arithmetic injection *)
-    let inject_unknown =
-      (* the injection function is different according to the strategy (handle uninterpreted terms or not) *)
-      match uninterpreted_data with
-      | Lia (table, counter) -> inject_unknown_lia (table, counter)
-      | Full -> inject_unknown_full
+let exists_morphism ~m_from:t ~m_to:t' = List.exists (fun m -> m.from_type = t && m.to_type = t') known_morphisms
+
+(* injection function looking for a morphism from source_type to target_type and applying it to form *)
+let inject_with_morphism ~source_type ~target_type formula =
+  match List.find_opt (fun m -> m.from_type = source_type && m.to_type = target_type) known_morphisms with
+  (* there is no morphism from source_type to target_type *)
+  | None -> Error (Printf.sprintf
+    "cannot inject %s into %s: no morphism found" (string_of_c_type source_type) (string_of_c_type target_type))
+  (* there is a morphism, we can apply it *)
+  | Some m -> Ok (App (c_formula_of_morphism m, [formula]))
+
+let input_types_of_function = function
+  | Var (_, Tarrow { in_types; _ }) -> Ok in_types
+  | formula -> Error (Printf.sprintf "%s is not a function" (pprint_to_str false formula))
+
+let output_type_of_function = function
+  | Var (_, Tarrow { out_type; _ }) -> Ok out_type
+  | formula -> Error (Printf.sprintf "%s is not a function" (pprint_to_str false formula))
+
+(* tries to inject elements of a formula into the global target type *)
+(* if nothing is possible, this does not fail *)
+let rec try_inject_global ~global_target_type formula =
+  let* formula_type = typecheck formula in
+  match () with
+  (* the formula already has the right type *)
+  | _ when formula_type = global_target_type -> Ok formula
+  (* the formula does not have the right type, but it is injectable *)
+  | _ when exists_morphism ~m_from:global_target_type ~m_to:formula_type ->
+    let* injected_formula = inject ~global_target_type ~target_type:global_target_type formula in
+    inject_with_morphism ~source_type:global_target_type ~target_type:formula_type injected_formula
+  | _otherwise ->
+    (* we can do nothing on this formula, but we can try to inject its arguments, if it is a function application *)
+    let walk_through ~global_target_type = function
+    | Var _ as var -> Ok var
+    | App (f, args) ->
+      let* injected_arguments = mapM (try_inject_global ~global_target_type) args in
+      Ok (App (f, injected_arguments))
     in
-    match injection inject_unknown c_Z app with
-    | Ok app' -> app'
-    | Error e -> (print_endline e; app)
+    walk_through ~global_target_type formula
 
-    (* TODO : predicates on unknown and non integer types? *)
+(* injects the formula into the target_type, translating as much as possible below it too *)
+(* this is stricter than the previous one, we need a term of type target_type as an output *)
+and inject ~global_target_type ~target_type = function
+  | Var (_, var_type) as var -> inject_with_morphism ~source_type:var_type ~target_type var
+  | App (f, args) ->
+    (* TODO: use target type in the table (we might want to translate to something else than Z) *)
+    match Hashtbl.find_opt arith_translations f with
+    (* f has an associated function f' in the target type, we change it and inject the arguments in their new types *)
+    | Some f' ->
+      let inject_argument (formula, target_type) = inject ~global_target_type ~target_type formula in
+      let* new_arg_types = input_types_of_function f' in
+      let* injected_args = mapM inject_argument (List.combine args new_arg_types) in
+      Ok (App (f', injected_args))
+    (* f is unknown but we know its output type is injectable into the target type *)
+    (* we try to inject everything below f, making sure the types at the top of the AST below f have not changed *)
+    | None ->
+      let* f_out_type = output_type_of_function f in
+      let* injected_args = mapM (try_inject_global ~global_target_type) args in
+      inject_with_morphism ~source_type:f_out_type ~target_type:global_target_type (App (f, injected_args))
 
-(*
-O -> 0
-x -> TofZ ZofT x ->
-op x y z -> op' (ZofT x) (ZofT y) (ZofT z)
-f x y z -> f (TofZ ZofT x) (TofZ ZofT y) (TofZ ZofT z) -> 
-*)
-
-let translate uninterpreted_terms_strategy form =
-  let uninterpreted_data =
-    match uninterpreted_terms_strategy with
-    | LiaStrategy -> Lia (Hashtbl.create 17, ref 0)
-    | FullStrategy -> Full
+(* link between logic and arithmetic, translates predicates and uses inject / try_inject_global at the right time *)
+let process_predicate ~target_arith_type (f, args) =
+  let (f', inject_argument) =
+    (* TODO: different table for predicates? *)
+    match Hashtbl.find_opt arith_translations f with
+    (* f is associated to another predicate taking arguments in the target type *)
+    (* we inject them and replace f with f' *)
+    | Some f' -> (f', inject ~global_target_type:target_arith_type ~target_type:target_arith_type)
+    (* f is an unknown predicate, we do not change it and we try to inject its arguments into the global target type *)
+    | None -> (f, try_inject_global ~global_target_type:target_arith_type)
   in
-  form
-  |> bool_to_Prop
-  |> integers_to_Z uninterpreted_data
+  let* injected_args = mapM inject_argument args in
+  Ok (App (f', injected_args))
+
+(* first function called in the translation, handles logic and delegates the rest to process_predicate *)
+let rec process_logic ~target_arith_type = function
+  (* boolean variable, just add `= true` *)
+  | Var (_, t) as var when t = c_bool -> Ok (App (eq c_bool, [var; b_true]))
+  (* Prop variable *)
+  | Var _ as var -> Ok var
+  | App (f, args) ->
+    if List.mem f logical_connectors then
+      (* f is already a logical connector in Prop, we just process the logic of its arguments *)
+      let* processed_args = mapM (process_logic ~target_arith_type) args in
+      Ok (App (f, processed_args))
+    else match CFormulaMap.find_opt f logic_translations with
+    (* f is a logical connector in bool, we translate it to its equivalent in Prop, as well as its arguments *)
+    | Some f' ->
+      let* processed_args = mapM (process_logic ~target_arith_type) args in
+      Ok (App (f', processed_args))
+    (* f is not a logical connector, it is either a non-logical function or an unknown predicate *)
+    | None ->
+      let app' =
+        match CFormulaMap.find_opt f boolean_translations with
+        (* f is a boolean relation associated to f' in Prop, and its arguments are non-logical *)
+        | Some f' -> (f', args)
+        (* f is an unknown predicate, we change nothing *)
+        | None -> (f, args)
+      in
+      (* now we process the predicate, injecting as much as we can below it into the target type *)
+      process_predicate ~target_arith_type app'
+
+(* TODO: lia mode with replacement of uninterpreted terms *)
+let uninterpreted_terms_strategy = ref Full
+
+(* translation function from bool to Prop and from several arithmetic types to a single one *)
+let translate ~lia_mode ~target_arith_type formula =
+  if lia_mode then
+    uninterpreted_terms_strategy := Lia (Hashtbl.create 17, ref 0)
+  else
+    uninterpreted_terms_strategy := Full;
+  process_logic ~target_arith_type formula
 
 (* test *)
 
@@ -499,26 +474,26 @@ let test (name, form) =
     let* t = typecheck form in
     Printf.printf " : %s\n\n" (string_of_c_type t);
 
-    print_endline "==[ bool_to_Prop ]==";
+    (* print_endline "==[ bool_to_Prop ]==";
     let form' = bool_to_Prop form in
     pprint_formula false form';
     let* t' = typecheck form' in
-    Printf.printf " : %s\n\n" (string_of_c_type t');
+    Printf.printf " : %s\n\n" (string_of_c_type t'); *)
 
-    print_endline "==[ translate_lia ]==";
-    let form'' = translate LiaStrategy form in
+    (* print_endline "==[ translate_lia ]==";
+    let* form'' = translate ~lia_mode:true ~target_arith_type:c_Z form in
     pprint_formula false form'';
     let* t'' = typecheck form'' in
-    Printf.printf " : %s\n\n" (string_of_c_type t'');
+    Printf.printf " : %s\n\n" (string_of_c_type t''); *)
 
-    print_endline "==[ translate ]==";
-    let form''' = translate FullStrategy form in
+    (* print_endline "==[ translate ]=="; *)
+    let* form''' = translate ~lia_mode:false ~target_arith_type:c_Z form in
     pprint_formula false form''';
     let* t''' = typecheck form''' in
     Printf.printf " : %s\n\n" (string_of_c_type t''');
 
-    print_endline "==[ with types ]==";
-    pprint_endline true form''';
+    (* print_endline "==[ with types ]==";
+    pprint_endline true form'''; *)
     Ok ()
   end
   |> Result.iter_error (Printf.printf "\nType error: %s\n")
