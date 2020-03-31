@@ -19,20 +19,6 @@ let rec string_of_c_type = function
       (String.concat " -> " (List.map string_of_c_type (in_types @ [out_type])))
   | Tname n -> n
 
-let (let*) r f = Result.bind r f
-
-(* Haskell's mapM with ('a, 'b) result *)
-(* ('a -> ('b, 'c) result) -> 'a list -> ('b list, 'c) result *)
-(* generates a result from every 'a in the list, and returns the list of 'b wrapped in a result *)
-(* stops on the first 'c error (if any) and returns it in the final result *)
-let mapM f l =
-  let rec mapM' acc = function
-    | [] -> Ok (List.rev acc)
-    | x :: xs ->
-      let* a = f x in
-      mapM' (a :: acc) xs
-  in mapM' [] l
-
 (* checks that l and l' are equal; if not, gives the index of the first values that are different *)
 let list_eq l l' =
   let rec list_eq' n = function
@@ -109,39 +95,36 @@ let pprint_to_str pt form =
   pprint (fun s -> str := s :: !str) pt (fun () -> ()) form;
   String.concat "" (List.rev !str)
 
+exception Type_error of string
 (* formula typechecking function *)
 (* formulas are really simple so there is no need for an environment parameter *)
 (* (could make it CPS to typecheck big formulas) *)
 let rec typecheck = function
-  | Var (x, t) -> Ok t (* a variable is well-typed *)
+  | Var (x, t) -> t (* a variable is well-typed *)
   | App (f, fs) ->
     (* a function application is well-typed if the types of the inputs of the function *)
     (* match the types of the arguments, which we check with mapM and list_eq *)
     match typecheck f with
     (* f typechecks and is a function *)
-    | Ok (Tarrow { in_types; out_type }) -> begin
+    | Tarrow { in_types; out_type } -> begin
       (* the arguments individually typecheck *)
-      let* ts = mapM typecheck fs in
-      match list_eq ts in_types with
-      | Ok () -> Ok out_type (* the input types match, the type of the application is the output type of the function *)
+      match list_eq (List.map typecheck fs) in_types with
+      | Ok () -> out_type (* the input types match, the type of the application is the output type of the function *)
       | Error (-1) -> (* lists of different lengths, thus an invalid number of arguments *)
-        Error (Printf.sprintf "invalid number of arguments for %s" (pprint_to_str false f))
+        raise (Type_error (Printf.sprintf "invalid number of arguments for %s" (pprint_to_str false f)))
       | Error n -> (* an input type does not match *)
-        Error (Printf.sprintf
+        raise (Type_error (Printf.sprintf
           "argument %d is not well-typed for %s"
-          (n + 1) (pprint_to_str false f))
+          (n + 1) (pprint_to_str false f)))
     end
     (* f typechecks but it is not a function *)
-    | Ok _ ->
-      Error (Printf.sprintf "%s is not a function, it cannot be applied" (pprint_to_str false f))
-    (* f does not typecheck *)
-    | error -> error
+    | _ ->
+      raise (Type_error (Printf.sprintf "%s is not a function, it cannot be applied" (pprint_to_str false f)))
 
 let typecheck_function f =
-  let* t = typecheck f in
-  match t with
-  | Tarrow { out_type; _ } -> Ok out_type
-  | _ -> Ok t
+  match typecheck f with
+  | Tarrow { out_type; _ } -> out_type
+  | t -> t
 
 (* our algorithms *)
 
@@ -170,24 +153,6 @@ let boolean_translations = CFormulaMap.of_seq (List.to_seq
     (eqb c_bool, eq c_bool);
     (eqb c_T, eq c_T) ])
 
-let rec bool_to_Prop = function
-  (* boolean variable, just add `= true` *)
-  | Var (_, t) as var when t = c_bool -> App (eq c_bool, [var; b_true])
-  (* other variables *)
-  | Var _ as var -> var
-  (* function application *)
-  | App (f, args) as app ->
-    match CFormulaMap.find_opt f logic_translations with
-    (* f is a logical connector, we translate it and its arguments *)
-    | Some f' -> App (f', List.map bool_to_Prop args)
-    (* f is not a logical connector, now we check if it is a boolean relation *)
-    | None ->
-      match CFormulaMap.find_opt f boolean_translations with
-      (* f is a boolean relation associated to f' in Prop *)
-      | Some f' -> App (f', args)
-      (* f is an ordinary function, we change nothing *)
-      | None -> app
-
 (* describes an injection from a type to another, with morphism properties *)
 type morphism =
   { from_type: c_type
@@ -206,6 +171,8 @@ let known_morphisms =
 let c_formula_of_morphism { from_type; to_type; name } =
   Var (name, Tarrow { in_types = [from_type]; out_type = to_type })
 
+let known_morphisms_fun = List.map c_formula_of_morphism known_morphisms
+
 (* known functions and their equivalents in Z *)
 let arith_translations =
   let h = Hashtbl.create 17 in
@@ -221,41 +188,42 @@ type uninterpreted_terms_internal = Lia of (c_formula, c_formula) Hashtbl.t * in
 
 let exists_morphism ~m_from:t ~m_to:t' = List.exists (fun m -> m.from_type = t && m.to_type = t') known_morphisms
 
+exception Injection_error of string
+
 (* injection function looking for a morphism from source_type to target_type and applying it to form *)
 let inject_with_morphism ~source_type ~target_type formula =
   match List.find_opt (fun m -> m.from_type = source_type && m.to_type = target_type) known_morphisms with
   (* there is no morphism from source_type to target_type *)
-  | None -> Error (Printf.sprintf
-    "cannot inject %s into %s: no morphism found" (string_of_c_type source_type) (string_of_c_type target_type))
+  | None -> raise (Injection_error (Printf.sprintf
+    "cannot inject %s into %s: no morphism found" (string_of_c_type source_type) (string_of_c_type target_type)))
   (* there is a morphism, we can apply it *)
-  | Some m -> Ok (App (c_formula_of_morphism m, [formula]))
+  | Some m -> App (c_formula_of_morphism m, [formula])
 
 let input_types_of_function = function
-  | Var (_, Tarrow { in_types; _ }) -> Ok in_types
-  | formula -> Error (Printf.sprintf "%s is not a function" (pprint_to_str false formula))
+  | Var (_, Tarrow { in_types; _ }) -> in_types
+  | formula -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false formula)))
 
 let output_type_of_function = function
-  | Var (_, Tarrow { out_type; _ }) -> Ok out_type
-  | formula -> Error (Printf.sprintf "%s is not a function" (pprint_to_str false formula))
+  | Var (_, Tarrow { out_type; _ }) -> out_type
+  | formula -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false formula)))
 
 (* tries to inject elements of a formula into the global target type *)
 (* if nothing is possible, this does not fail *)
 let rec try_inject_global ~global_target_type formula =
-  let* formula_type = typecheck formula in
-  match () with
+  let formula_type = typecheck formula in
   (* the formula already has the right type *)
-  | _ when formula_type = global_target_type -> Ok formula
+  if formula_type = global_target_type then formula
   (* the formula does not have the right type, but it is injectable *)
-  | _ when exists_morphism ~m_from:global_target_type ~m_to:formula_type ->
-    let* injected_formula = inject ~global_target_type ~target_type:global_target_type formula in
+  else if exists_morphism ~m_from:global_target_type ~m_to:formula_type then
+    let injected_formula = inject ~global_target_type ~target_type:global_target_type formula in
     inject_with_morphism ~source_type:global_target_type ~target_type:formula_type injected_formula
-  | _otherwise ->
+  else
     (* we can do nothing on this formula, but we can try to inject its arguments, if it is a function application *)
     let walk_through ~global_target_type = function
-    | Var _ as var -> Ok var
+    | Var _ as var -> var
     | App (f, args) ->
-      let* injected_arguments = mapM (try_inject_global ~global_target_type) args in
-      Ok (App (f, injected_arguments))
+      let injected_arguments = List.map (try_inject_global ~global_target_type) args in
+      App (f, injected_arguments)
     in
     walk_through ~global_target_type formula
 
@@ -269,14 +237,14 @@ and inject ~global_target_type ~target_type = function
     (* f has an associated function f' in the target type, we change it and inject the arguments in their new types *)
     | Some f' ->
       let inject_argument (formula, target_type) = inject ~global_target_type ~target_type formula in
-      let* new_arg_types = input_types_of_function f' in
-      let* injected_args = mapM inject_argument (List.combine args new_arg_types) in
-      Ok (App (f', injected_args))
+      let new_arg_types = input_types_of_function f' in
+      let injected_args = List.map inject_argument (List.combine args new_arg_types) in
+      App (f', injected_args)
     (* f is unknown but we know its output type is injectable into the target type *)
     (* we try to inject everything below f, making sure the types at the top of the AST below f have not changed *)
     | None ->
-      let* f_out_type = output_type_of_function f in
-      let* injected_args = mapM (try_inject_global ~global_target_type) args in
+      let f_out_type = output_type_of_function f in
+      let injected_args = List.map (try_inject_global ~global_target_type) args in
       inject_with_morphism ~source_type:f_out_type ~target_type:global_target_type (App (f, injected_args))
 
 (* link between logic and arithmetic, translates predicates and uses inject / try_inject_global at the right time *)
@@ -290,25 +258,25 @@ let process_predicate ~target_arith_type (f, args) =
     (* f is an unknown predicate, we do not change it and we try to inject its arguments into the global target type *)
     | None -> (f, try_inject_global ~global_target_type:target_arith_type)
   in
-  let* injected_args = mapM inject_argument args in
-  Ok (App (f', injected_args))
+  let injected_args = List.map inject_argument args in
+  App (f', injected_args)
 
 (* first function called in the translation, handles logic and delegates the rest to process_predicate *)
 let rec process_logic ~target_arith_type = function
   (* boolean variable, just add `= true` *)
-  | Var (_, t) as var when t = c_bool -> Ok (App (eq c_bool, [var; b_true]))
+  | Var (_, t) as var when t = c_bool -> App (eq c_bool, [var; b_true])
   (* Prop variable *)
-  | Var _ as var -> Ok var
+  | Var _ as var -> var
   | App (f, args) ->
     if List.mem f logical_connectors then
       (* f is already a logical connector in Prop, we just process the logic of its arguments *)
-      let* processed_args = mapM (process_logic ~target_arith_type) args in
-      Ok (App (f, processed_args))
+      let processed_args = List.map (process_logic ~target_arith_type) args in
+      App (f, processed_args)
     else match CFormulaMap.find_opt f logic_translations with
     (* f is a logical connector in bool, we translate it to its equivalent in Prop, as well as its arguments *)
     | Some f' ->
-      let* processed_args = mapM (process_logic ~target_arith_type) args in
-      Ok (App (f', processed_args))
+      let processed_args = List.map (process_logic ~target_arith_type) args in
+      App (f', processed_args)
     (* f is not a logical connector, it is either a non-logical function or an unknown predicate *)
     | None ->
       let app' =
@@ -324,13 +292,63 @@ let rec process_logic ~target_arith_type = function
 (* TODO: lia mode with replacement of uninterpreted terms *)
 let uninterpreted_terms_strategy = ref Full
 
+module StringSet = Set.Make(String)
+
+let renaming formula =
+  let rec mk_name_table_list s k = function
+    | [] -> k s
+    | f :: fs -> mk_name_table s (fun s' -> mk_name_table_list s' k fs) f
+  and mk_name_table s k = function
+    | Var (x, _) -> k (StringSet.add x s)
+    | App (f, args) -> mk_name_table s (fun s' -> mk_name_table_list s' k args) f
+  in
+  let name_table = mk_name_table StringSet.empty (fun s -> s) formula in
+  let rec fresh name = if StringSet.mem name name_table then fresh (name ^ "'") else name in
+  let rec renaming' table name_table = function
+    | Var _ as var -> var
+    | App (f, args) as app ->
+      match Hashtbl.find_opt table app with
+      | Some var_alias -> var_alias
+      | None ->
+        let add_and_return formula = (Hashtbl.add table app formula; formula) in
+        if not (List.mem f known_morphisms_fun) then
+          let renamed_args = List.map (renaming' table name_table) args in
+          add_and_return (App (f, renamed_args))
+        else match args with
+        | [Var (x, _)] ->
+          let t = output_type_of_function f in
+          add_and_return (Var (fresh x, t))
+        | [App (g, args)] ->
+          let t = output_type_of_function f in
+          let find_type = function
+            | Var (_, t) as var -> (t, var)
+            | App (m, [formula]) when List.mem m known_morphisms_fun ->
+              let formula' = renaming' table name_table formula in
+              (typecheck formula', formula')
+            | App (_, _) as app -> (typecheck app, app)
+          in
+          let arg_types = List.map find_type args in
+          let g_name =
+            match g with
+            | Var (name, _) -> name
+            | _ -> raise (Type_error "function is an application")
+          in
+          let g' = Var (fresh g_name, Tarrow { in_types = List.map fst arg_types; out_type = t }) in
+          add_and_return (App (g', List.map snd arg_types))
+        | _ ->
+          let renamed_args = List.map (renaming' table name_table) args in
+          add_and_return (App (f, renamed_args))
+  in
+  renaming' (Hashtbl.create 17) name_table formula
+
 (* translation function from bool to Prop and from several arithmetic types to a single one *)
 let translate ~lia_mode ~target_arith_type formula =
   if lia_mode then
     uninterpreted_terms_strategy := Lia (Hashtbl.create 17, ref 0)
   else
     uninterpreted_terms_strategy := Full;
-  process_logic ~target_arith_type formula
+  let formula' = process_logic ~target_arith_type formula in
+  renaming formula'
 
 (* test *)
 
@@ -466,38 +484,30 @@ let f7 =
       App (w, [App (h, [x])]);
       App (w, [App (h, [App (f, [App (add c_int, [y; zero])])])])])])
 
+let f8 =
+  let x = Var ("x", c_int) in
+  let y = Var ("y", c_int) in
+  let f = Var ("f", Tarrow { in_types = [c_int]; out_type = c_int }) in
+  let g = Var ("g", Tarrow { in_types = [c_int]; out_type = c_int }) in
+  App (eq c_int, [
+    App (add c_int, [App (f, [App (g, [x])]); App (g, [y])]);
+    App (add c_int, [App (g, [y]); App (f, [App (g, [x])])])
+  ])
+
 let test (name, form) =
   begin
     Printf.printf "=====*=====*===== TEST %s =====*=====*=====\n" name;
 
     pprint_formula false form;
-    let* t = typecheck form in
-    Printf.printf " : %s\n\n" (string_of_c_type t);
+    Printf.printf " : %s\n\n" (string_of_c_type (typecheck form));
 
-    (* print_endline "==[ bool_to_Prop ]==";
-    let form' = bool_to_Prop form in
-    pprint_formula false form';
-    let* t' = typecheck form' in
-    Printf.printf " : %s\n\n" (string_of_c_type t'); *)
-
-    (* print_endline "==[ translate_lia ]==";
-    let* form'' = translate ~lia_mode:true ~target_arith_type:c_Z form in
-    pprint_formula false form'';
-    let* t'' = typecheck form'' in
-    Printf.printf " : %s\n\n" (string_of_c_type t''); *)
-
-    (* print_endline "==[ translate ]=="; *)
-    let* form''' = translate ~lia_mode:false ~target_arith_type:c_Z form in
+    let form''' = translate ~lia_mode:false ~target_arith_type:c_Z form in
     pprint_formula false form''';
-    let* t''' = typecheck form''' in
-    Printf.printf " : %s\n\n" (string_of_c_type t''');
-
-    (* print_endline "==[ with types ]==";
-    pprint_endline true form'''; *)
+    Printf.printf " : %s\n\n" (string_of_c_type (typecheck form'''));
     Ok ()
   end
   |> Result.iter_error (Printf.printf "\nType error: %s\n")
 
 let () =
-  let test_cases = [f1; f2; f3; f4; f5; f6; f7] in
+  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
