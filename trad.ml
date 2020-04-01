@@ -514,18 +514,14 @@ let f8 =
   ])
 
 let test (name, form) =
-  begin
     Printf.printf "=====*=====*===== TEST %s =====*=====*=====\n" name;
 
     pprint_formula false form;
     Printf.printf " : %s\n\n" (string_of_c_type (typecheck form));
 
-    let form''' = translate ~lia_mode:false ~target_arith_type:c_Z form in
-    pprint_formula false form''';
-    Printf.printf " : %s\n\n" (string_of_c_type (typecheck form'''));
-    Ok ()
-  end
-  |> Result.iter_error (Printf.printf "\nType error: %s\n")
+    let form' = translate ~lia_mode:false ~target_arith_type:c_Z form in
+    pprint_formula false form';
+    Printf.printf " : %s\n\n" (string_of_c_type (typecheck form'))
 
 let () =
   let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8] in
