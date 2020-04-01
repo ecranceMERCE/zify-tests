@@ -71,8 +71,11 @@ let b_false = Var ("false", c_bool)
 (* - pt: a boolean indicating whether we need to print the types *)
 (* - k: continuation *)
 
+module StringSet = Set.Make(String)
+
 (* operators that must be printed in infix notation *)
-let infix = ["->"; "="; "<"; "*"; "+"; "-->"; "=?"; "<?"; "/\\"; "\\/"; "~"; "&&"; "||"; "~~"]
+let infix = StringSet.of_list
+  ["->"; "="; "<"; "*"; "+"; "-->"; "=?"; "<?"; "/\\"; "\\/"; "~"; "&&"; "||"; "~~"]
 
 let rec pprint_list p pt k = function
   | [] -> k ()
@@ -80,7 +83,7 @@ let rec pprint_list p pt k = function
   | f :: fs -> pprint p pt (fun () -> p " "; pprint_list p pt k fs) f
 
 and pprint p pt k = function
-  | App (Var (f, tf), [arg1; arg2]) when List.mem f infix ->
+  | App (Var (f, tf), [arg1; arg2]) when StringSet.mem f infix ->
     p "("; pprint p pt (fun () -> p (" " ^ f ^ " "); pprint p pt (fun () -> p ")"; k ()) arg2) arg1
   | App (f, args) -> begin
     p "(";
@@ -129,11 +132,14 @@ let typecheck_function f =
 (* our algorithms *)
 
 (* formula to formula map to store associations *)
-module CFormulaMap = Map.Make (
-  struct
-    type t = c_formula
-    let compare = Stdlib.compare
-  end)
+
+module CFormula = struct
+  type t = c_formula
+  let compare = Stdlib.compare
+end
+
+module CFormulaMap = Map.Make(CFormula)
+module CFormulaSet = Set.Make(CFormula)
 
 (* logical connectors in bool and their equivalents in Prop *)
 (* they all take bool arguments so translating them means translating the arguments *)
@@ -144,7 +150,11 @@ let logic_translations = CFormulaMap.of_seq (List.to_seq
     (orb, c_or) ])
 
 (* list of logical connectors in Prop *)
-let logical_connectors = List.map snd (CFormulaMap.bindings logic_translations)
+let logical_connectors =
+  logic_translations
+  |> CFormulaMap.to_seq
+  |> Seq.map snd
+  |> CFormulaSet.of_seq
 
 (* boolean relations and their equivalents in Prop *)
 let boolean_translations = CFormulaMap.of_seq (List.to_seq
@@ -160,6 +170,13 @@ type morphism =
   ; name: string
   }
 
+module Morphism = struct
+  type t = morphism
+  let compare = Stdlib.compare
+end
+
+module MorphismSet = Set.Make(Morphism)
+
 (* known morphisms *)
 let known_morphisms =
   [ { from_type = c_int; to_type = c_Z; name = "Z_of_int" };
@@ -171,7 +188,11 @@ let known_morphisms =
 let c_formula_of_morphism { from_type; to_type; name } =
   Var (name, Tarrow { in_types = [from_type]; out_type = to_type })
 
-let known_morphisms_fun = List.map c_formula_of_morphism known_morphisms
+let known_morphisms_fun =
+  known_morphisms
+  |> List.to_seq
+  |> Seq.map c_formula_of_morphism
+  |> CFormulaSet.of_seq
 
 (* known functions and their equivalents in Z *)
 let arith_translations =
@@ -268,7 +289,7 @@ let rec process_logic ~target_arith_type = function
   (* Prop variable *)
   | Var _ as var -> var
   | App (f, args) ->
-    if List.mem f logical_connectors then
+    if CFormulaSet.mem f logical_connectors then
       (* f is already a logical connector in Prop, we just process the logic of its arguments *)
       let processed_args = List.map (process_logic ~target_arith_type) args in
       App (f, processed_args)
@@ -292,8 +313,6 @@ let rec process_logic ~target_arith_type = function
 (* TODO: lia mode with replacement of uninterpreted terms *)
 let uninterpreted_terms_strategy = ref Full
 
-module StringSet = Set.Make(String)
-
 let renaming formula =
   let rec mk_name_table_list s k = function
     | [] -> k s
@@ -311,7 +330,7 @@ let renaming formula =
       | Some var_alias -> var_alias
       | None ->
         let add_and_return formula = (Hashtbl.add table app formula; formula) in
-        if not (List.mem f known_morphisms_fun) then
+        if not (CFormulaSet.mem f known_morphisms_fun) then
           let renamed_args = List.map (renaming' table name_table) args in
           add_and_return (App (f, renamed_args))
         else match args with
@@ -322,7 +341,7 @@ let renaming formula =
           let t = output_type_of_function f in
           let find_type = function
             | Var (_, t) as var -> (t, var)
-            | App (m, [formula]) when List.mem m known_morphisms_fun ->
+            | App (m, [formula]) when CFormulaSet.mem m known_morphisms_fun ->
               let formula' = renaming' table name_table formula in
               (typecheck formula', formula')
             | App (_, _) as app -> (typecheck app, app)
