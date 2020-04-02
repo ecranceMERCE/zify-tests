@@ -1,28 +1,30 @@
-(* modelling simplified Coq types *)
-
-type c_type =
-  | TProp (* Coq's Prop type *)
+(* simplified Coq types *)
+type coq_type =
+  | TProp
   | Tbool
   | TZ
-  | Tarrow of { in_types: c_type list; out_type: c_type } (* function types with one or several inputs and an output *)
+  | Tarrow of { in_types: coq_type list; out_type: coq_type } (* function types *)
   | Tname of string (* other types *)
 
-type c_formula =
-  | App of c_formula * c_formula list (* function application *)
-  | Var of string * c_type (* variable *)
-  | Const of string * c_type
+(* simplified Coq formulas *)
+type coq_formula =
+  | App of coq_formula * coq_formula list (* function application *)
+  | Var of string * coq_type (* variable *)
+  | Const of string * coq_type (* constant *)
 
-(* utils *)
+(* ===== * ================= * ===== *)
+(* ===== * ===== utils ===== * ===== *)
+(* ===== * ================= * ===== *)
 
 (* displaying a type *)
-let rec string_of_c_type = function
+let rec string_of_coq_type = function
   | TProp -> "Prop"
   | Tbool -> "bool"
   | TZ -> "Z"
   | Tarrow { in_types; out_type } ->
     Printf.sprintf "(%s)"
-      (String.concat " -> " (List.map string_of_c_type (in_types @ [out_type])))
-  | Tname n -> n
+      (String.concat " -> " (List.map string_of_coq_type (in_types @ [out_type])))
+  | Tname type_name -> type_name
 
 (* checks that l and l' are equal; if not, gives the index of the first values that are different *)
 let list_eq l l' =
@@ -32,7 +34,8 @@ let list_eq l l' =
     | _ -> Error (-1)
   in list_eq' 0 (l, l')
 
-let (<|>) o o' = if o = None then o' else o
+(* allows an "or" operation on options *)
+let (<|>) opt opt' = if opt = None then opt' else opt
 
 (* particular known types and values *)
 
@@ -63,9 +66,6 @@ let b_true = Var ("true", Tbool)
 let b_false = Var ("false", Tbool)
 
 (* pretty printing of formulas *)
-(* - p: the function that outputs a string *)
-(* - pt: a boolean indicating whether we need to print the types *)
-(* - k: continuation *)
 
 module StringSet = Set.Make(String)
 
@@ -73,92 +73,92 @@ module StringSet = Set.Make(String)
 let infix = StringSet.of_list
   ["->"; "="; "<"; "*"; "+"; "-->"; "=?"; "<?"; "/\\"; "\\/"; "~"; "&&"; "||"; "~~"]
 
-let rec pprint_list p pt k = function
+let rec pprint_list print must_print_types formulas k =
+  match formulas with
   | [] -> k ()
-  | [f] -> pprint p pt k f
-  | f :: fs -> pprint p pt (fun () -> p " "; pprint_list p pt k fs) f
+  | [formula] -> pprint print must_print_types formula k
+  | formula :: fs ->
+    pprint print must_print_types formula (fun () -> print " "; pprint_list print must_print_types fs k)
 
-and pprint p pt k = function
-  | App (Var (f, tf), [arg1; arg2]) when StringSet.mem f infix ->
-    p "("; pprint p pt (fun () -> p (" " ^ f ^ " "); pprint p pt (fun () -> p ")"; k ()) arg2) arg1
-  | App (f, args) -> begin
-    p "(";
-    pprint p pt (fun () -> p " "; pprint_list p pt (fun () -> p ")") args; k ()) f
-  end
+and pprint print must_print_types formula k =
+  match formula with
+  | App (Var (func, _), [arg1; arg2]) when StringSet.mem func infix ->
+    print "(";
+    pprint print must_print_types arg1 (fun () ->
+      print (" " ^ func ^ " ");
+      pprint print must_print_types arg2 (fun () -> print ")"; k ()))
+  | App (func, args) ->
+    print "(";
+    pprint print must_print_types func (fun () ->
+      print " ";
+      pprint_list print must_print_types args (fun () -> print ")"; k ()))
   | Var (x, tx)
-  | Const (x, tx) -> (p (x ^ (if pt then "[" ^ string_of_c_type tx ^ "]" else "")); k ())
+  | Const (x, tx) -> (print (x ^ (if must_print_types then "[" ^ string_of_coq_type tx ^ "]" else "")); k ())
 
-let pprint_formula pt = pprint print_string pt (fun () -> ())
-let pprint_endline pt = pprint print_string pt print_newline
-let pprint_to_str pt form =
+let pprint_formula must_print_types formula = pprint print_string must_print_types formula (fun () -> ())
+let pprint_endline must_print_types formula = pprint print_string must_print_types formula print_newline
+let pprint_to_str must_print_types formula =
   let str = ref [] in
-  pprint (fun s -> str := s :: !str) pt (fun () -> ()) form;
+  pprint (fun s -> str := s :: !str) must_print_types formula (fun () -> ());
   String.concat "" (List.rev !str)
 
+(* ===== * ======================== * ===== *)
+(* ===== * ===== typechecking ===== * ===== *)
+(* ===== * ======================== * ===== *)
+
 exception Type_error of string
+
 (* formula typechecking function *)
 (* formulas are really simple so there is no need for an environment parameter *)
-(* (could make it CPS to typecheck big formulas) *)
+(* TODO: make it CPS to typecheck big formulas? *)
 let rec typecheck = function
+  (* a variable or constant is well-typed *)
   | Const (_, t)
-  | Var (_, t) -> t (* a variable or constant is well-typed *)
-  | App (f, fs) ->
-    (* a function application is well-typed if the types of the inputs of the function *)
-    (* match the types of the arguments, which we check with mapM and list_eq *)
-    match typecheck f with
-    (* f typechecks and is a function *)
+  | Var (_, t) -> t
+  (* a function application is well-typed if the types of the inputs of the function *)
+  (* match the types of the arguments *)
+  | App (func, args) ->
+    match typecheck func with
     | Tarrow { in_types; out_type } -> begin
-      (* the arguments individually typecheck *)
-      match list_eq (List.map typecheck fs) in_types with
-      | Ok () -> out_type (* the input types match, the type of the application is the output type of the function *)
-      | Error (-1) -> (* lists of different lengths, thus an invalid number of arguments *)
-        raise (Type_error (Printf.sprintf "invalid number of arguments for %s" (pprint_to_str false f)))
-      | Error n -> (* an input type does not match *)
+      match list_eq (List.map typecheck args) in_types with
+      (* the input types match, the type of the application is the output type of the function *)
+      | Ok () -> out_type
+
+      (* lists of different lengths, thus an invalid number of arguments *)
+      | Error (-1) ->
+        raise (Type_error (Printf.sprintf "invalid number of arguments for %s" (pprint_to_str false func)))
+
+      (* an input type does not match *)
+      | Error n ->
         raise (Type_error (Printf.sprintf
           "argument %d (%s) is not well-typed for %s"
-          (n + 1) (pprint_to_str false (List.nth fs n)) (pprint_to_str false f)))
+          (n + 1) (pprint_to_str false (List.nth args n)) (pprint_to_str false func)))
     end
-    (* f typechecks but it is not a function *)
     | _ ->
-      raise (Type_error (Printf.sprintf "%s is not a function, it cannot be applied" (pprint_to_str false f)))
+      raise (Type_error (Printf.sprintf "%s is not a function, it cannot be applied" (pprint_to_str false func)))
 
-let typecheck_function f =
-  match typecheck f with
-  | Tarrow { out_type; _ } -> out_type
-  | t -> t
-
-(* our algorithms *)
+(* ===== * ======================= * ===== *)
+(* ===== * ===== translation ===== * ===== *)
+(* ===== * ======================= * ===== *)
 
 (* describes an injection from a type to another, with morphism properties *)
 type morphism =
-  { from_type: c_type
-  ; to_type: c_type
+  { from_type: coq_type
+  ; to_type: coq_type
   ; name: string
   }
 
-(* known morphisms *)
+(* the known morphisms are declared by the user *)
 let known_morphisms =
   [ { from_type = c_int; to_type = TZ; name = "Z_of_int" };
     { from_type = TZ; to_type = c_int; name = "int_of_Z" };
     { from_type = c_nat; to_type = TZ; name = "Z_of_nat" };
     { from_type = TZ; to_type = c_nat; name = "nat_of_Z" } ]
 
-(* getting a function from a morphism type *)
-let c_formula_of_morphism { from_type; to_type; name } =
+let coq_formula_of_morphism { from_type; to_type; name } =
   Var (name, Tarrow { in_types = [from_type]; out_type = to_type })
 
 let exists_morphism ~m_from:t ~m_to:t' = List.exists (fun m -> m.from_type = t && m.to_type = t') known_morphisms
-
-exception Injection_error of string
-
-(* injection function looking for a morphism from source_type to target_type and applying it to form *)
-let inject_with_morphism ~source_type ~target_type formula =
-  match List.find_opt (fun m -> m.from_type = source_type && m.to_type = target_type) known_morphisms with
-  (* there is no morphism from source_type to target_type *)
-  | None -> raise (Injection_error (Printf.sprintf
-    "cannot inject %s into %s: no morphism found" (string_of_c_type source_type) (string_of_c_type target_type)))
-  (* there is a morphism, we can apply it *)
-  | Some m -> App (c_formula_of_morphism m, [formula])
 
 let input_types_of_function = function
   | Var (_, Tarrow { in_types; _ }) -> in_types
@@ -168,7 +168,8 @@ let output_type_of_function = function
   | Var (_, Tarrow { out_type; _ }) -> out_type
   | formula -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false formula)))
 
-(* test *)
+(* functions that have an equivalent in another type *)
+(* these are partly standard (logical connectors, etc) but can be declared by the user too  *)
 let known_functions = Hashtbl.of_seq (List.to_seq
   [ (implb, impl);
     (negb, c_not);
@@ -183,6 +184,8 @@ let known_functions = Hashtbl.of_seq (List.to_seq
     (lt c_int, lt TZ);
     (eq c_int, eq TZ) ])
 
+(* calls f x until x is None, and returns x *)
+(* useful to go through known_functions several times *)
 let repeat_opt f x =
   let rec repeat_opt' f x =
     match f x with
@@ -194,104 +197,137 @@ let repeat_opt f x =
   | Some x' -> repeat_opt' f x'
 
 exception Translation_error of string
+
 let name_of_function = function
   | Var (x, Tarrow _) -> x
   | _ -> failwith "name_of_function"
-let fresh x = x ^ "'"
-(* let count = ref 0 *)
-let rec translate' target_type translation_compulsory translation_table formula =
-  (* let () =
-    let n = !count in
-    incr count;
-    Printf.printf "[debug-%d] translate' %s %B .. %s\n" n (string_of_c_type target_type) translation_compulsory (pprint_to_str false formula)
-  in *)
-  let out =
-    match formula with
-    | Const (c, Tbool) when target_type = TProp -> if c = "true" then Const ("True", TProp) else Const ("False", TProp)
-    | Const (c, t) as const when t = target_type -> const
-    | Const (c, t) as const -> if exists_morphism ~m_from:t ~m_to:target_type then Const (c, target_type) else const
-    | Var (_, Tbool) as var when target_type = TProp -> App (eq Tbool, [var; b_true])
-    | Var (x, t) as var when t = target_type -> var
-    | Var (x, t) as var ->
-      let var' = Option.value (Hashtbl.find_opt translation_table var) ~default:var in
-      let t' = typecheck var' in
-      if t' = target_type then var'
-      else if exists_morphism ~m_from:t ~m_to:target_type then begin
-        let var' = Var (fresh x, target_type) in
-        Hashtbl.add translation_table var var';
-        var'
-      end
-      else if translation_compulsory then raise (Translation_error "var cannot be translated")
-      else var
-    | App (f, args) ->
-      let output_type = output_type_of_function f in
-      match repeat_opt (Hashtbl.find_opt known_functions) f <|> Hashtbl.find_opt translation_table f with
-      | Some f' ->
-        let output_type' = output_type_of_function f' in
-        if output_type' <> target_type then raise (Translation_error "associated function does not have the right type")
-        else
-          (* let () = Printf.printf "recursive table %s found for %s\n" (pprint_to_str true f') (pprint_to_str false f) in *)
-          let f_in_types, f'_in_types = input_types_of_function f, input_types_of_function f' in
-          (* let translate_arg (arg, type_before, type_after) =
-            if type_before = type_after then arg else translate' type_after true translation_table arg
-          in
-          let translated_args = List.map translate_arg (combine3 args f_in_types f'_in_types) in *)
-          let translate_arg arg type_after = translate' type_after true translation_table arg in
-          let translated_args = List.map2 translate_arg args f'_in_types in
-          App (f', translated_args)
-      | None ->
-        (* let () = Printf.printf "%s is None in the table\n" (pprint_to_str false f) in *)
-        let f_in_types = input_types_of_function f in
-        (* let () = Printf.printf "its inputs are [%s]\n" (String.concat ";" (List.map string_of_c_type f_in_types)) in *)
-        let translate_arg arg type_before =
-          if type_before = TProp || type_before = c_Z then arg
-          else if type_before = Tbool then translate' TProp false translation_table arg
-          else translate' c_Z false translation_table arg
-        in
-        let translated_args = List.map2 translate_arg args f_in_types in
-        let translated_args_types = List.map typecheck translated_args in
-        (* let () = Printf.printf "its translated inputs are [%s]\n" (String.concat ";" (List.map string_of_c_type translated_args_types)) in *)
-        if target_type = output_type then
-          if translated_args_types = f_in_types then
-            (* f has the right type and the arguments haven't changed *)
-            App (f, translated_args)
-          else begin
-            (* f has the right type but the arguments have been injected, we need to create an f' *)
-            let f' =
-              Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = output_type })
-            in
-            Hashtbl.add translation_table f f';
-            App (f', translated_args)
-          end
-        else
-          (* let () = Printf.printf "output is different from target\n" in *)
-          if exists_morphism ~m_from:output_type ~m_to:target_type then begin
-            (* f does not have the right type, we need to create an f' *)
-            (* let () = Printf.printf "exists morphism %s %s we create new function\n" (string_of_c_type output_type) (string_of_c_type target_type) in *)
-            let f' =
-              Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = target_type })
-            in
-            Hashtbl.add translation_table f f';
-            App (f', translated_args)
-          end
-          else
-          (* let () = Printf.printf "no morphism %s %s\n" (string_of_c_type output_type) (string_of_c_type target_type) in *)
-          if translation_compulsory then raise (Translation_error "app cannot be translated")
-          else if translated_args_types = f_in_types then App (f, translated_args)
-          else
+
+(* finds all variable and function names in the formula (to be able to generate fresh names) *)
+let rec find_all_symbols = function
+  | Const (x, _)
+  | Var (x, _) -> StringSet.singleton x
+  | App (func, args) ->
+    List.fold_left
+      (fun symbols arg -> StringSet.union symbols (find_all_symbols arg))
+      (StringSet.singleton (name_of_function func))
+      args
+
+(* main translation function: *)
+(* - target is the target type *)
+(* - compulsory indicates if we MUST inject or if we are only trying *)
+(* - translation_table is the hashtable saving all the generated associated values during the process *)
+(* - fresh is the function generating fresh names for associated functions and variables *)
+let rec translate' ~target ~compulsory ~translation_table ~fresh = function
+  (* boolean constants and their equivalent in Prop *)
+  | Const (c, Tbool) when target = TProp -> if c = "true" then Const ("True", TProp) else Const ("False", TProp)
+
+  (* if the type is already ok, do not change anything *)
+  | Const (c, t) as const when t = target -> const
+
+  (* otherwise look for a morphism *)
+  | Const (c, t) as const ->
+    if exists_morphism ~m_from:t ~m_to:target then Const (c, target)
+    else if compulsory then raise (Translation_error (Printf.sprintf "cannot inject constant %s" c))
+    else const
+  
+  (* boolean variables are translated to Prop by adding "= true" *)
+  | Var (_, Tbool) as var when target = TProp -> App (eq Tbool, [var; b_true])
+
+  (* if the type is already ok, do not change anything *)
+  | Var (x, t) as var when t = target -> var
+
+  (* here we need to look for a morphism, but variables are given a new name and saved in the table *)
+  | Var (x, t) as var ->
+    let var' = Option.value (Hashtbl.find_opt translation_table var) ~default:var in
+    if typecheck var' = target then var'
+    else if exists_morphism ~m_from:t ~m_to:target then begin
+      let var' = Var (fresh x, target) in
+      Hashtbl.add translation_table var var';
+      var'
+    end
+    else if compulsory then raise (Translation_error (Printf.sprintf "var %s cannot be translated" x))
+    else var
+
+  | App (f, args) ->
+    let output_type = output_type_of_function f in
+    match repeat_opt (Hashtbl.find_opt known_functions) f <|> Hashtbl.find_opt translation_table f with
+    (* f is known and has a translation, or has been encountered and given a translation in the table earlier *)
+    | Some f' ->
+      let output_type' = output_type_of_function f' in
+      if output_type' <> target then
+        (* the associated function is irrelevant because it does not give the right type *)
+        raise (Translation_error (Printf.sprintf
+          "associated function %s for %s does not have the right type"
+          (pprint_to_str false f') (pprint_to_str false f)))
+      else
+        (* the associated function is right, we inject the arguments into their new types *)
+        let f_in_types, f'_in_types = input_types_of_function f, input_types_of_function f' in
+        let translate_arg arg target = translate' ~target ~compulsory:true ~translation_table ~fresh arg in
+        let translated_args = List.map2 translate_arg args f'_in_types in
+        App (f', translated_args)
+    
+    (* f is unknown *)
+    | None ->
+      let f_in_types = input_types_of_function f in
+      let translate_arg arg type_before =
+        (* TODO: remove first case? *)
+        if type_before = TProp || type_before = TZ then arg
+        else if type_before = Tbool then translate' ~target:TProp ~compulsory:false ~translation_table ~fresh arg
+        else translate' ~target:TZ ~compulsory:false ~translation_table ~fresh arg
+      in
+      let translated_args = List.map2 translate_arg args f_in_types in
+      let translated_args_types = List.map typecheck translated_args in
+      if target = output_type then
+        if translated_args_types = f_in_types then
+          (* f has the right type and the types of the arguments have not changed after trying an injection *)
+          App (f, translated_args)
+        else begin
+          (* f has the right type but the arguments have been injected, we need to create an f' *)
           let f' =
-              Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = output_type })
-            in
-            Hashtbl.add translation_table f f';
-            App (f', translated_args)
+            Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = output_type })
+          in
+          Hashtbl.add translation_table f f';
+          App (f', translated_args)
+        end
+      else
+        if exists_morphism ~m_from:output_type ~m_to:target then begin
+          (* f does not have the right type, we need to create an f' *)
+          let f' =
+            Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = target })
+          in
+          Hashtbl.add translation_table f f';
+          App (f', translated_args)
+        end
+        (* f does not have the right output type, and cannot be injected *)
+        else if compulsory then
+          raise (Translation_error (Printf.sprintf
+            "application %s cannot be translated correctly"
+            (pprint_to_str false f)))
+        (* translation was not compulsory and the inputs have not changed, we can keep f *)
+        else if translated_args_types = f_in_types then App (f, translated_args)
+        else
+        (* translation was not compulsory, but the inputs have changed, so we can change f with an f' *)
+        let f' =
+          Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = output_type })
+        in
+        Hashtbl.add translation_table f f';
+        App (f', translated_args)
 
+(* toplevel version with less arguments, for convenience *)
+let translate formula =
+  let symbols = ref (find_all_symbols formula) in
+  let rec fresh x =
+    if StringSet.mem x !symbols then fresh (x ^ "'")
+    else begin
+      symbols := StringSet.add x !symbols;
+      x
+    end
   in
-  (* decr count;
-  let n = !count in
-  Printf.printf "[debug-out-%d] %s\n" n (pprint_to_str true out); *)
-  out
+  translate' ~target:TProp ~compulsory:true ~translation_table:(Hashtbl.create 17) ~fresh formula
 
-  (* if new_output_type = Tbool then App (eq Tbool, [new_app; b_true]) else new_app *)
+(* ===== * ================= * ===== *)
+(* ===== * ===== tests ===== * ===== *)
+(* ===== * ================= * ===== *)
 
 (*
 forall (x y z : int) (b1 b2 : bool) (f : int -> bool),
@@ -350,9 +386,9 @@ forall (x y : T) (f : T -> U) (g : U -> int),
   g (f x) + g (f y) = g (f y) + g (f x).
 *)
 let f4 =
-  let x = Var ("x", Tname "T") in
-  let y = Var ("y", Tname "T") in
-  let f = Var ("f", Tarrow { in_types = [Tname "T"]; out_type = Tname "U" }) in
+  let x = Var ("x", c_T) in
+  let y = Var ("y", c_T) in
+  let f = Var ("f", Tarrow { in_types = [c_T]; out_type = Tname "U" }) in
   let g = Var ("g", Tarrow { in_types = [Tname "U"]; out_type = c_int }) in
   App (eq c_int, [
     App (add c_int, [
@@ -367,10 +403,10 @@ forall (x y : T) (f : T -> int) (g : int -> V) (h : V -> int),
   h (g ((f x) + (f y))) + 0 = h (g ((f y) + (f x) + 0)).
 *)
 let f5 =
-  let x = Var ("x", Tname "T") in
-  let y = Var ("y", Tname "T") in
+  let x = Var ("x", c_T) in
+  let y = Var ("y", c_T) in
   let zero = Const ("0", c_int) in
-  let f = Var ("f", Tarrow { in_types = [Tname "T"]; out_type = c_int }) in
+  let f = Var ("f", Tarrow { in_types = [c_T]; out_type = c_int }) in
   let g = Var ("g", Tarrow { in_types = [c_int]; out_type = Tname "V" }) in
   let h = Var ("h", Tarrow { in_types = [Tname "V"]; out_type = c_int }) in
   App (eq c_int, [
@@ -435,18 +471,14 @@ let f8 =
     App (add c_int, [App (g, [y]); App (f, [App (g, [x])])])
   ])
 
-let test (name, form) =
+let test (name, formula) =
     Printf.printf "=====*=====*===== TEST %s =====*=====*=====\n" name;
-
-    pprint_formula false form;
-    Printf.printf " : %s\n\n" (string_of_c_type (typecheck form));
-
-    (* let form' = translate ~lia_mode:false ~target_arith_type:c_Z form in *)
-    (* count := 0; *)
-    let form' = translate' TProp true (Hashtbl.create 17) form in
-    pprint_endline false form';
-    pprint_formula true form';
-    Printf.printf " : %s\n\n" (string_of_c_type (typecheck form'))
+    pprint_formula false formula;
+    Printf.printf " : %s\n\n" (string_of_coq_type (typecheck formula));
+    let formula' = translate formula in
+    pprint_endline false formula';
+    pprint_formula true formula';
+    Printf.printf " : %s\n\n" (string_of_coq_type (typecheck formula'))
 
 let () =
   let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8] in
