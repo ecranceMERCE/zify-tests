@@ -3,6 +3,7 @@
 type c_type =
   | TProp (* Coq's Prop type *)
   | Tbool
+  | TZ
   | Tarrow of { in_types: c_type list; out_type: c_type } (* function types with one or several inputs and an output *)
   | Tname of string (* other types *)
 
@@ -17,6 +18,7 @@ type c_formula =
 let rec string_of_c_type = function
   | TProp -> "Prop"
   | Tbool -> "bool"
+  | TZ -> "Z"
   | Tarrow { in_types; out_type } ->
     Printf.sprintf "(%s)"
       (String.concat " -> " (List.map string_of_c_type (in_types @ [out_type])))
@@ -30,21 +32,11 @@ let list_eq l l' =
     | _ -> Error (-1)
   in list_eq' 0 (l, l')
 
-let combine3 l1 l2 l3 =
-  let rec combine3' acc l1 l2 l3 =
-    match l1, l2, l3 with
-    | [], [], [] -> List.rev acc
-    | h1 :: t1, h2 :: t2, h3 :: t3 -> combine3' ((h1, h2, h3) :: acc) t1 t2 t3
-    | _ -> raise (Invalid_argument "combine3")
-  in
-  combine3' [] l1 l2 l3
-
 let (<|>) o o' = if o = None then o' else o
 
 (* particular known types and values *)
 
 let c_int = Tname "int"
-let c_Z = Tname "Z"
 let c_nat = Tname "nat"
 let c_T = Tname "T"
 
@@ -137,16 +129,6 @@ let typecheck_function f =
 
 (* our algorithms *)
 
-(* formula to formula map to store associations *)
-
-module CFormula = struct
-  type t = c_formula
-  let compare = Stdlib.compare
-end
-
-module CFormulaMap = Map.Make(CFormula)
-module CFormulaSet = Set.Make(CFormula)
-
 (* describes an injection from a type to another, with morphism properties *)
 type morphism =
   { from_type: c_type
@@ -154,25 +136,16 @@ type morphism =
   ; name: string
   }
 
-module Morphism = struct
-  type t = morphism
-  let compare = Stdlib.compare
-end
-
-module MorphismSet = Set.Make(Morphism)
-
 (* known morphisms *)
 let known_morphisms =
-  [ { from_type = c_int; to_type = c_Z; name = "Z_of_int" };
-    { from_type = c_Z; to_type = c_int; name = "int_of_Z" };
-    { from_type = c_nat; to_type = c_Z; name = "Z_of_nat" };
-    { from_type = c_Z; to_type = c_nat; name = "nat_of_Z" } ]
+  [ { from_type = c_int; to_type = TZ; name = "Z_of_int" };
+    { from_type = TZ; to_type = c_int; name = "int_of_Z" };
+    { from_type = c_nat; to_type = TZ; name = "Z_of_nat" };
+    { from_type = TZ; to_type = c_nat; name = "nat_of_Z" } ]
 
 (* getting a function from a morphism type *)
 let c_formula_of_morphism { from_type; to_type; name } =
   Var (name, Tarrow { in_types = [from_type]; out_type = to_type })
-
-type uninterpreted_terms_internal = Lia of (c_formula, c_formula) Hashtbl.t * int ref | Full
 
 let exists_morphism ~m_from:t ~m_to:t' = List.exists (fun m -> m.from_type = t && m.to_type = t') known_morphisms
 
@@ -205,10 +178,10 @@ let known_functions = Hashtbl.of_seq (List.to_seq
     (eqb c_int, eq c_int);
     (eqb Tbool, eq Tbool);
     (eqb c_T, eq c_T);
-    (mul c_int, mul c_Z);
-    (add c_int, add c_Z);
-    (lt c_int, lt c_Z);
-    (eq c_int, eq c_Z) ])
+    (mul c_int, mul TZ);
+    (add c_int, add TZ);
+    (lt c_int, lt TZ);
+    (eq c_int, eq TZ) ])
 
 let repeat_opt f x =
   let rec repeat_opt' f x =
@@ -225,7 +198,7 @@ let name_of_function = function
   | Var (x, Tarrow _) -> x
   | _ -> failwith "name_of_function"
 let fresh x = x ^ "'"
-let count = ref 0
+(* let count = ref 0 *)
 let rec translate' target_type translation_compulsory translation_table formula =
   (* let () =
     let n = !count in
@@ -478,14 +451,3 @@ let test (name, form) =
 let () =
   let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
-
-(* let () =
-  let x = Var ("x", c_int) in
-  let b1 = Var ("b1", Tbool) in
-  let b2 = Var ("b2", Tbool) in
-  let f = Var ("f", Tarrow { in_types = [c_int]; out_type = Tbool }) in
-  
-  let form' = translate' TProp true (Hashtbl.create 17) (App (andb, [b1; App (eqb Tbool, [App (f, [x]); b2])])) in
-  pprint_endline false form';
-  pprint_formula true form';
-  Printf.printf " : %s\n\n" (string_of_c_type (typecheck form')) *)
