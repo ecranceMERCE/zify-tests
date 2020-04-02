@@ -224,67 +224,99 @@ exception Translation_error of string
 let name_of_function = function
   | Var (x, Tarrow _) -> x
   | _ -> failwith "name_of_function"
-let fresh x = x
-let rec translate' target_type translation_compulsory translation_table = function
-  | Const (c, Tbool) when target_type = TProp -> if c = "true" then Const ("True", TProp) else Const ("False", TProp)
-  | Const (c, t) as const when t = target_type -> const
-  | Const (c, t) as const -> if exists_morphism ~m_from:t ~m_to:target_type then Const (c, target_type) else const
-  | Var (_, Tbool) as var when target_type = TProp -> App (eq Tbool, [var; b_true])
-  | Var (x, t) as var when t = target_type -> var
-  | Var (x, t) as var ->
-    let var' = Option.value (Hashtbl.find_opt translation_table var) ~default:var in
-    let t' = typecheck var' in
-    if t' = target_type then var'
-    else if exists_morphism ~m_from:t ~m_to:target_type then begin
-      let var' = Var (fresh x, target_type) in
-      Hashtbl.add translation_table var var';
-      var'
-    end
-    else if translation_compulsory then raise (Translation_error "var cannot be translated")
-    else var
-  | App (f, args) ->
-    let output_type = output_type_of_function f in
-    match repeat_opt (Hashtbl.find_opt known_functions) f <|> Hashtbl.find_opt translation_table f with
-    | Some f' ->
-      let f_in_types, f'_in_types = input_types_of_function f, input_types_of_function f' in
-      let translate_arg (arg, type_before, type_after) =
-        if type_before = type_after then arg else translate' type_after true translation_table arg
-      in
-      let translated_args = List.map translate_arg (combine3 args f_in_types f'_in_types) in
-      App (f', translated_args)
-      (* TODO: check output type and throw *)
-    | None ->
-      let f_in_types = input_types_of_function f in
-      let translate_arg arg type_before =
-        if type_before = TProp || type_before = c_Z then arg
-        else if type_before = Tbool then translate' TProp false translation_table arg
-        else translate' c_Z false translation_table arg
-      in
-      let translated_args = List.map2 translate_arg args f_in_types in
-      let translated_args_types = List.map typecheck translated_args in
-      if target_type = output_type then
-        if translated_args_types = f_in_types then
-          (* f has the right type and the arguments haven't changed *)
-          App (f, translated_args)
-        else begin
-          (* f has the right type but the arguments have been injected, we need to create an f' *)
-          let f' =
-            Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = output_type })
+let fresh x = x ^ "'"
+let count = ref 0
+let rec translate' target_type translation_compulsory translation_table formula =
+  (* let () =
+    let n = !count in
+    incr count;
+    Printf.printf "[debug-%d] translate' %s %B .. %s\n" n (string_of_c_type target_type) translation_compulsory (pprint_to_str false formula)
+  in *)
+  let out =
+    match formula with
+    | Const (c, Tbool) when target_type = TProp -> if c = "true" then Const ("True", TProp) else Const ("False", TProp)
+    | Const (c, t) as const when t = target_type -> const
+    | Const (c, t) as const -> if exists_morphism ~m_from:t ~m_to:target_type then Const (c, target_type) else const
+    | Var (_, Tbool) as var when target_type = TProp -> App (eq Tbool, [var; b_true])
+    | Var (x, t) as var when t = target_type -> var
+    | Var (x, t) as var ->
+      let var' = Option.value (Hashtbl.find_opt translation_table var) ~default:var in
+      let t' = typecheck var' in
+      if t' = target_type then var'
+      else if exists_morphism ~m_from:t ~m_to:target_type then begin
+        let var' = Var (fresh x, target_type) in
+        Hashtbl.add translation_table var var';
+        var'
+      end
+      else if translation_compulsory then raise (Translation_error "var cannot be translated")
+      else var
+    | App (f, args) ->
+      let output_type = output_type_of_function f in
+      match repeat_opt (Hashtbl.find_opt known_functions) f <|> Hashtbl.find_opt translation_table f with
+      | Some f' ->
+        let output_type' = output_type_of_function f' in
+        if output_type' <> target_type then raise (Translation_error "associated function does not have the right type")
+        else
+          (* let () = Printf.printf "recursive table %s found for %s\n" (pprint_to_str true f') (pprint_to_str false f) in *)
+          let f_in_types, f'_in_types = input_types_of_function f, input_types_of_function f' in
+          (* let translate_arg (arg, type_before, type_after) =
+            if type_before = type_after then arg else translate' type_after true translation_table arg
           in
-          Hashtbl.add translation_table f f';
+          let translated_args = List.map translate_arg (combine3 args f_in_types f'_in_types) in *)
+          let translate_arg arg type_after = translate' type_after true translation_table arg in
+          let translated_args = List.map2 translate_arg args f'_in_types in
           App (f', translated_args)
-        end
-      else
-        if exists_morphism ~m_from:output_type ~m_to:target_type then begin
-          (* f does not have the right type, we need to create an f' *)
+      | None ->
+        (* let () = Printf.printf "%s is None in the table\n" (pprint_to_str false f) in *)
+        let f_in_types = input_types_of_function f in
+        (* let () = Printf.printf "its inputs are [%s]\n" (String.concat ";" (List.map string_of_c_type f_in_types)) in *)
+        let translate_arg arg type_before =
+          if type_before = TProp || type_before = c_Z then arg
+          else if type_before = Tbool then translate' TProp false translation_table arg
+          else translate' c_Z false translation_table arg
+        in
+        let translated_args = List.map2 translate_arg args f_in_types in
+        let translated_args_types = List.map typecheck translated_args in
+        (* let () = Printf.printf "its translated inputs are [%s]\n" (String.concat ";" (List.map string_of_c_type translated_args_types)) in *)
+        if target_type = output_type then
+          if translated_args_types = f_in_types then
+            (* f has the right type and the arguments haven't changed *)
+            App (f, translated_args)
+          else begin
+            (* f has the right type but the arguments have been injected, we need to create an f' *)
+            let f' =
+              Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = output_type })
+            in
+            Hashtbl.add translation_table f f';
+            App (f', translated_args)
+          end
+        else
+          (* let () = Printf.printf "output is different from target\n" in *)
+          if exists_morphism ~m_from:output_type ~m_to:target_type then begin
+            (* f does not have the right type, we need to create an f' *)
+            (* let () = Printf.printf "exists morphism %s %s we create new function\n" (string_of_c_type output_type) (string_of_c_type target_type) in *)
+            let f' =
+              Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = target_type })
+            in
+            Hashtbl.add translation_table f f';
+            App (f', translated_args)
+          end
+          else
+          (* let () = Printf.printf "no morphism %s %s\n" (string_of_c_type output_type) (string_of_c_type target_type) in *)
+          if translation_compulsory then raise (Translation_error "app cannot be translated")
+          else if translated_args_types = f_in_types then App (f, translated_args)
+          else
           let f' =
-            Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = target_type })
-          in
-          Hashtbl.add translation_table f f';
-          App (f', translated_args)
-        end
-        else if translation_compulsory then raise (Translation_error "app cannot be translated")
-        else App (f, translated_args)
+              Var (fresh (name_of_function f), Tarrow { in_types = translated_args_types; out_type = output_type })
+            in
+            Hashtbl.add translation_table f f';
+            App (f', translated_args)
+
+  in
+  (* decr count;
+  let n = !count in
+  Printf.printf "[debug-out-%d] %s\n" n (pprint_to_str true out); *)
+  out
 
   (* if new_output_type = Tbool then App (eq Tbool, [new_app; b_true]) else new_app *)
 
@@ -437,6 +469,7 @@ let test (name, form) =
     Printf.printf " : %s\n\n" (string_of_c_type (typecheck form));
 
     (* let form' = translate ~lia_mode:false ~target_arith_type:c_Z form in *)
+    (* count := 0; *)
     let form' = translate' TProp true (Hashtbl.create 17) form in
     pprint_endline false form';
     pprint_formula true form';
@@ -445,3 +478,14 @@ let test (name, form) =
 let () =
   let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
+
+(* let () =
+  let x = Var ("x", c_int) in
+  let b1 = Var ("b1", Tbool) in
+  let b2 = Var ("b2", Tbool) in
+  let f = Var ("f", Tarrow { in_types = [c_int]; out_type = Tbool }) in
+  
+  let form' = translate' TProp true (Hashtbl.create 17) (App (andb, [b1; App (eqb Tbool, [App (f, [x]); b2])])) in
+  pprint_endline false form';
+  pprint_formula true form';
+  Printf.printf " : %s\n\n" (string_of_c_type (typecheck form')) *)
