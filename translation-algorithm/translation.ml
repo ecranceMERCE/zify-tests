@@ -16,6 +16,9 @@ type coq_formula =
 (* ===== * ===== utils ===== * ===== *)
 (* ===== * ================= * ===== *)
 
+let identity = fun x -> x
+let constantly x = fun _ -> x
+
 (* displaying a type *)
 let rec string_of_coq_type = function
   | TProp -> "Prop"
@@ -95,11 +98,11 @@ and pprint print must_print_types formula k =
   | Var (x, tx)
   | Const (x, tx) -> (print (x ^ (if must_print_types then "[" ^ string_of_coq_type tx ^ "]" else "")); k ())
 
-let pprint_formula must_print_types formula = pprint print_string must_print_types formula (fun () -> ())
+let pprint_formula must_print_types formula = pprint print_string must_print_types formula identity
 let pprint_endline must_print_types formula = pprint print_string must_print_types formula print_newline
 let pprint_to_str must_print_types formula =
   let str = ref [] in
-  pprint (fun s -> str := s :: !str) must_print_types formula (fun () -> ());
+  pprint (fun s -> str := s :: !str) must_print_types formula identity;
   String.concat "" (List.rev !str)
 
 (* ===== * ======================== * ===== *)
@@ -325,6 +328,39 @@ let translate formula =
   in
   translate' ~target:TProp ~compulsory:true ~translation_table:(Hashtbl.create 17) ~fresh formula
 
+module CoqFormulaSet = Set.Make(struct
+  type t = coq_formula
+  let compare = Stdlib.compare
+end)
+
+let no_renaming_functions = CoqFormulaSet.of_list
+  [impl; c_not; c_and; c_or; eq c_T; eq Tbool; eq TZ; lt TZ; mul TZ; add TZ]
+
+let rename formula =
+  let rec subst ~before ~after ~in_formula = in_formula
+  in
+  let rec rename_list full_formula seen_formulas formulas k =
+    match formulas with
+    | [] -> k (List.rev seen_formulas)
+    | formula :: fs ->
+      rename full_formula formula (fun formula' has_changed ->
+        if has_changed then
+          let full_formula' = subst ~before:formula ~after:formula' ~in_formula:full_formula in
+          rename full_formula' full_formula' constantly
+        else
+          rename_list full_formula (formula' :: seen_formulas) fs k)
+  and rename full_formula formula k =
+    match formula with
+    | App (f, args) when CoqFormulaSet.mem f no_renaming_functions ->
+      rename_list full_formula [] args (fun seen_formulas -> k (App (f, seen_formulas)) false)
+    | App (f, args) ->
+      (* TODO *) k formula false
+    | formula -> k formula false
+  in
+  rename formula formula constantly
+
+  (* : coq_formula -> coq_formula list -> coq_formula list -> (coq_formula list -> 'a) -> 'a *)
+
 (* ===== * ================= * ===== *)
 (* ===== * ===== tests ===== * ===== *)
 (* ===== * ================= * ===== *)
@@ -478,7 +514,11 @@ let test (name, formula) =
     let formula' = translate formula in
     pprint_endline false formula';
     pprint_formula true formula';
-    Printf.printf " : %s\n\n" (string_of_coq_type (typecheck formula'))
+    Printf.printf " : %s\n\n" (string_of_coq_type (typecheck formula'));
+    let formula'' = rename formula' in
+    pprint_endline false formula'';
+    pprint_formula true formula'';
+    Printf.printf " : %s\n\n" (string_of_coq_type (typecheck formula''))
 
 let () =
   let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8] in
