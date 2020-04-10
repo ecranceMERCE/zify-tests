@@ -383,9 +383,7 @@ let logical_connectors = CoqTermSet.of_list [impl; c_or; c_and; c_not; equiv]
 
 (* PROP TO BOOL VERSION *)
 
-let rec embed ~target ~compulsory ~translation_table ~fresh formula =
-  (* let () = Printf.printf "embed target:%5s compulsory: %5B %s\n" (string_of_coq_type target) compulsory (pprint_to_str false formula) in *)
-  match formula with
+let rec embed ~target ~compulsory ~translation_table ~fresh = function
   (* Prop constants and their equivalent in bool *)
   | Const (_, TProp) as const when target = Tbool -> if const = p_True then b_true else b_false
 
@@ -536,6 +534,8 @@ let rec embed ~target ~compulsory ~translation_table ~fresh formula =
 
 let embed ~fresh term =
   embed ~target:TProp ~compulsory:true ~translation_table:(Hashtbl.create 17) ~fresh term
+
+(* renaming algorithm, not finished *)
 
 (* functions we do not want the renaming algorithm to change *)
 let no_renaming_functions = CoqTermSet.of_list
