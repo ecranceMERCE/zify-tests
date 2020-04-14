@@ -791,6 +791,43 @@ let f8 =
     App (add c_int, [App (g, [y]); App (f, [App (g, [x])])])
   ])
 
+let f9 =
+  let x = Var ("x", c_int) in
+  let y = Var ("y", c_int) in
+  let zero = Const ("0", c_int) in
+  App (impl, [
+    App (eq c_int, [x; y]);
+    App (impl, [
+      App (eq c_int, [x; zero]);
+      App (eq c_int, [y; zero])
+    ])
+  ])
+
+let f10 =
+  let x = Var ("x", c_int) in
+  let y = Var ("y", c_int) in
+  let zero = Const ("0", c_int) in
+  App (impl, [
+    App (eq c_int, [x; y]);
+    App (impl, [
+      App (is_true, [App (eqb c_int, [x; zero])]);
+      App (eq c_int, [y; zero])
+    ])
+  ])
+
+let f11 =
+  let a = Var ("a", TProp) in
+  let b = Var ("b", Tbool) in
+  App (impl, [
+    App (c_or, [
+      App (c_and, [
+        App (is_true, [b]);
+        App (c_not, [App (is_true, [b])])]);
+      a]);
+    App (c_and, [
+      App (c_not, [App (eq Tbool, [b; b_true])]);
+      App (eq Tbool, [b; b_false])])])
+
 let test (name, term) =
     Printf.printf "=====*=====*===== TEST %s =====*=====*=====\n" name;
     pprint_term false term;
@@ -801,5 +838,5 @@ let test (name, term) =
     Printf.printf " : %s\n\n" (string_of_coq_type (typecheck term'))
 
 let () =
-  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8] in
+  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8; f9; f10; f11] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
