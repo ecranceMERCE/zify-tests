@@ -11,6 +11,7 @@ type coq_term =
   | App of coq_term * coq_term list (* function application *)
   | Var of string * coq_type (* variable *)
   | Const of string * coq_type (* constant *)
+  | Forall of string * coq_type * coq_term (* universal quantifier with a body in Prop *)
 
 (* ===== * ================= * ===== *)
 (* ===== * ===== utils ===== * ===== *)
@@ -147,6 +148,11 @@ and pprint print must_print_types term k =
       pprint_list print must_print_types args (fun () -> print ")"; k ()))
   | Var (x, tx)
   | Const (x, tx) -> (print (x ^ (if must_print_types then "[" ^ string_of_coq_type tx ^ "]" else "")); k ())
+  | Forall (x, tx, term') ->
+    print "(forall ";
+    print (x ^ (if must_print_types then " : " ^ string_of_coq_type tx else ""));
+    print ", ";
+    pprint print must_print_types term' (fun () -> print ")"; k ())
 
 let pprint_term must_print_types term = pprint print_string must_print_types term identity
 let pprint_endline must_print_types term = pprint print_string must_print_types term print_newline
@@ -161,26 +167,48 @@ let pprint_to_str must_print_types term =
 
 exception Type_error of string
 
+let input_types_of_function = function
+  | Var (_, Tarrow { in_types; _ }) -> in_types
+  | term -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false term)))
+
+let output_type_of_function = function
+  | Var (_, Tarrow { out_type; _ }) -> out_type
+  | term -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false term)))
+
+let rec type_of = function
+  | Const (_, t) | Var (_, t) -> t
+  | Forall (_, _, term) -> type_of term
+  | App (func, args) -> output_type_of_function func
+
+module TypeEnv = Map.Make (String)
+
 (* term typechecking function *)
-(* terms are really simple so there is no need for an environment parameter *)
-(* TODO: make it CPS to typecheck big terms? *)
-let rec typecheck = function
+let rec typecheck env = function
   (* a variable or constant is well-typed *)
-  | Const (_, t)
-  | Var (_, t) -> t
+  | Const (_, t) -> env
+  | Var (x, t) -> begin
+    match TypeEnv.find_opt x env with
+    | None -> env
+    | Some t' ->
+      if t' = t then env
+      else
+        raise (Type_error (Printf.sprintf
+          "variable %s has type %s, expected %s"
+          x (string_of_coq_type t') (string_of_coq_type t)))
+  end
+  | Forall (x, t, term) -> (ignore (typecheck (TypeEnv.add x t env) term); env)
   (* a function application is well-typed if the types of the inputs of the function *)
   (* match the types of the arguments *)
   | App (func, args) ->
-    match typecheck func with
+    ignore (typecheck env func);
+    match type_of func with
     | Tarrow { in_types; out_type } -> begin
-      match list_eq (List.map typecheck args) in_types with
+      match list_eq (List.map (fun arg -> ignore (typecheck env arg); type_of arg) args) in_types with
       (* the input types match, the type of the application is the output type of the function *)
-      | Ok () -> out_type
-
+      | Ok () -> env
       (* lists of different lengths, thus an invalid number of arguments *)
       | Error (-1) ->
         raise (Type_error (Printf.sprintf "invalid number of arguments for %s" (pprint_to_str false func)))
-
       (* an input type does not match *)
       | Error n ->
         raise (Type_error (Printf.sprintf
@@ -189,6 +217,8 @@ let rec typecheck = function
     end
     | _ ->
       raise (Type_error (Printf.sprintf "%s is not a function, it cannot be applied" (pprint_to_str false func)))
+
+let typecheck term = ignore (typecheck TypeEnv.empty term)
 
 (* ===== * ======================= * ===== *)
 (* ===== * ===== translation ===== * ===== *)
@@ -212,14 +242,6 @@ let coq_term_of_morphism { from_type; to_type; name } =
   Var (name, Tarrow { in_types = [from_type]; out_type = to_type })
 
 let exists_morphism ~m_from:t ~m_to:t' = List.exists (fun m -> m.from_type = t && m.to_type = t') known_morphisms
-
-let input_types_of_function = function
-  | Var (_, Tarrow { in_types; _ }) -> in_types
-  | term -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false term)))
-
-let output_type_of_function = function
-  | Var (_, Tarrow { out_type; _ }) -> out_type
-  | term -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false term)))
 
 (* functions that have an equivalent in another type *)
 (* these are partly standard (logical connectors, etc) but can be declared by the user too  *)
@@ -265,114 +287,7 @@ let rec find_all_symbols = function
       (fun symbols arg -> StringSet.union symbols (find_all_symbols arg))
       (StringSet.singleton (name_of_function func))
       args
-
-
-(* BOOL TO PROP VERSION *)
-
-(* main embedding function: *)
-(* - target is the target type *)
-(* - compulsory indicates if we MUST embed or if we are only trying *)
-(* - translation_table is the hashtable saving all the generated associated values during the process *)
-(* - fresh is the function generating fresh names for associated functions and variables *)
-let rec embed_b2p ~target ~compulsory ~translation_table ~fresh = function
-  (* boolean constants and their equivalent in Prop *)
-  | Const (c, Tbool) when target = TProp -> if c = "true" then Const ("True", TProp) else Const ("False", TProp)
-
-  (* if the type is already ok, do not change anything *)
-  | Const (c, t) as const when t = target -> const
-
-  (* otherwise look for a morphism *)
-  | Const (c, t) as const ->
-    if exists_morphism ~m_from:t ~m_to:target then Const (c, target)
-    else if compulsory then raise (Embedding_error (Printf.sprintf "cannot embed constant %s" c))
-    else const
-  
-  (* boolean variables are embedded into Prop by adding "= true" *)
-  | Var (_, Tbool) as var when target = TProp -> App (eq Tbool, [var; b_true])
-
-  (* if the type is already ok, do not change anything *)
-  | Var (x, t) as var when t = target -> var
-
-  (* here we need to look for a morphism, but variables are given a new name and saved in the table *)
-  | Var (x, t) as var ->
-    let var' = Option.value (Hashtbl.find_opt translation_table var) ~default:var in
-    if typecheck var' = target then var'
-    else if exists_morphism ~m_from:t ~m_to:target then begin
-      let var' = Var (fresh x, target) in
-      Hashtbl.add translation_table var var';
-      var'
-    end
-    else if compulsory then raise (Embedding_error (Printf.sprintf "var %s cannot be embedded" x))
-    else var
-
-  | App (f, args) ->
-    let output_type = output_type_of_function f in
-    match repeat_opt (Hashtbl.find_opt known_functions) f <|> Hashtbl.find_opt translation_table f with
-    (* f is known and has a translation, or has been encountered and given a translation in the table earlier *)
-    | Some f' ->
-      let output_type' = output_type_of_function f' in
-      if output_type' <> target then
-        (* the associated function is irrelevant because it does not give the right type *)
-        raise (Embedding_error (Printf.sprintf
-          "associated function %s for %s does not have the right type"
-          (pprint_to_str false f') (pprint_to_str false f)))
-      else
-        (* the associated function is right, we embed the arguments into their new types *)
-        let f_in_types, f'_in_types = input_types_of_function f, input_types_of_function f' in
-        let embed_arg arg target = embed_b2p ~target ~compulsory:true ~translation_table ~fresh arg in
-        let embedded_args = List.map2 embed_arg args f'_in_types in
-        App (f', embedded_args)
-    
-    (* f is unknown *)
-    | None ->
-      let f_in_types = input_types_of_function f in
-      let embed_arg arg type_before =
-        (* TODO: remove first case? *)
-        if type_before = TProp || type_before = TZ then arg
-        else if type_before = Tbool then embed_b2p ~target:TProp ~compulsory:false ~translation_table ~fresh arg
-        else embed_b2p ~target:TZ ~compulsory:false ~translation_table ~fresh arg
-      in
-      let embedded_args = List.map2 embed_arg args f_in_types in
-      let embedded_args_types = List.map typecheck embedded_args in
-      if target = output_type then
-        if embedded_args_types = f_in_types then
-          (* f has the right type and the types of the arguments have not changed after trying an embedding *)
-          App (f, embedded_args)
-        else begin
-          (* f has the right type but the arguments have been embedded, we need to create an f' *)
-          let f' =
-            Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = output_type })
-          in
-          Hashtbl.add translation_table f f';
-          App (f', embedded_args)
-        end
-      else
-        if exists_morphism ~m_from:output_type ~m_to:target then begin
-          (* f does not have the right type, we need to create an f' *)
-          let f' =
-            Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = target })
-          in
-          Hashtbl.add translation_table f f';
-          App (f', embedded_args)
-        end
-        (* f does not have the right output type, and cannot be embedded *)
-        else if compulsory then
-          raise (Embedding_error (Printf.sprintf
-            "application %s cannot be embedded correctly"
-            (pprint_to_str false f)))
-        (* embedding was not compulsory and the inputs have not changed, we can keep f *)
-        else if embedded_args_types = f_in_types then App (f, embedded_args)
-        else
-        (* embedding was not compulsory, but the inputs have changed, so we can change f with an f' *)
-        let f' =
-          Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = output_type })
-        in
-        Hashtbl.add translation_table f f';
-        App (f', embedded_args)
-
-(* toplevel version with less arguments, for convenience *)
-let embed_b2p ~fresh term =
-  embed_b2p ~target:TProp ~compulsory:true ~translation_table:(Hashtbl.create 17) ~fresh term
+  | Forall (x, t, term) -> StringSet.union (StringSet.singleton x) (find_all_symbols term)
 
 module CoqTermSet = Set.Make(struct
   type t = coq_term
@@ -381,8 +296,11 @@ end)
 
 let logical_connectors = CoqTermSet.of_list [impl; c_or; c_and; c_not; equiv]
 
-(* PROP TO BOOL VERSION *)
-
+(* main embedding function: *)
+(* - target is the target type *)
+(* - compulsory indicates if we MUST embed or if we are only trying *)
+(* - translation_table is the hashtable saving all the generated associated values during the process *)
+(* - fresh is the function generating fresh names for associated functions and variables *)
 let rec embed ~target ~compulsory ~translation_table ~fresh = function
   (* Prop constants and their equivalent in bool *)
   | Const (_, TProp) as const when target = Tbool -> if const = p_True then b_true else b_false
@@ -402,7 +320,7 @@ let rec embed ~target ~compulsory ~translation_table ~fresh = function
   (* here we need to look for a morphism, but variables are given a new name and saved in the table *)
   | Var (x, t) as var ->
     let var' = Option.value (Hashtbl.find_opt translation_table var) ~default:var in
-    if typecheck var' = target then var'
+    if type_of var' = target then var'
     else if exists_morphism ~m_from:t ~m_to:target then begin
       let var' = Var (fresh x, target) in
       Hashtbl.add translation_table var var';
@@ -410,6 +328,19 @@ let rec embed ~target ~compulsory ~translation_table ~fresh = function
     end
     else if compulsory then raise (Embedding_error (Printf.sprintf "var %s cannot be embedded" x))
     else var
+  
+  (* universal quantifier, we just propagate the function to the argument in Prop and change the header if needed *)
+  | Forall (x, t, term) ->
+    if target <> TProp && compulsory then
+      raise (Embedding_error (Printf.sprintf "a quantifier cannot be embedded into %s" (string_of_coq_type target)))
+    else
+      let embedded_term = embed ~target:TProp ~compulsory:true ~translation_table ~fresh term in
+      let (x', t') =
+        match Hashtbl.find_opt translation_table (Var (x, t)) with
+        | Some (Var (x', t')) -> (x', t')
+        | _ -> (x, t)
+      in    
+      Forall (x', t', embedded_term)
   
   (* logical connectors: try to propagate the embedding *)
   (* if everything changed to bool then we change the connector, and if the target is Prop, add `= true` *)
@@ -422,7 +353,7 @@ let rec embed ~target ~compulsory ~translation_table ~fresh = function
     in
     let embed_arg arg =
       let arg' = embed ~target:Tbool ~compulsory:false ~translation_table ~fresh arg in
-      (arg', typecheck arg')
+      (arg', type_of arg')
     in
     let embedded_args = List.map embed_arg args in
     if List.exists (fun (_, t) -> t = TProp) embedded_args then
@@ -436,25 +367,25 @@ let rec embed ~target ~compulsory ~translation_table ~fresh = function
   (* close to SMTCoq's Prop2bool tactic *)
   | App (f, [arg1; arg2]) when f = eq Tbool && arg1 = b_true ->
     let embedded_arg = embed ~target:Tbool ~compulsory:true ~translation_table ~fresh arg2 in
-    if target = TProp && typecheck embedded_arg = Tbool then
+    if target = TProp && type_of embedded_arg = Tbool then
       App (eq Tbool, [embedded_arg; b_true])
     else
       embedded_arg
   | App (f, [arg1; arg2]) when f = eq Tbool && arg2 = b_true ->
     let embedded_arg = embed ~target:Tbool ~compulsory:true ~translation_table ~fresh arg1 in
-    if target = TProp && typecheck embedded_arg = Tbool then
+    if target = TProp && type_of embedded_arg = Tbool then
       App (eq Tbool, [embedded_arg; b_true])
     else
       embedded_arg
   | App (f, [arg1; arg2]) when f = eq Tbool && arg1 = b_false ->
     let embedded_arg = embed ~target:Tbool ~compulsory:true ~translation_table ~fresh arg2 in
-    if target = TProp && typecheck embedded_arg = Tbool then
+    if target = TProp && type_of embedded_arg = Tbool then
       App (eq Tbool, [embedded_arg; b_false])
     else
       App (negb, [embedded_arg])
   | App (f, [arg1; arg2]) when f = eq Tbool && arg2 = b_false ->
     let embedded_arg = embed ~target:Tbool ~compulsory:true ~translation_table ~fresh arg1 in
-    if target = TProp && typecheck embedded_arg = Tbool then
+    if target = TProp && type_of embedded_arg = Tbool then
       App (eq Tbool, [embedded_arg; b_false])
     else
       App (negb, [embedded_arg])
@@ -495,7 +426,7 @@ let rec embed ~target ~compulsory ~translation_table ~fresh = function
         else embed ~target:TZ ~compulsory:false ~translation_table ~fresh arg
       in
       let embedded_args = List.map2 embed_arg args f_in_types in
-      let embedded_args_types = List.map typecheck embedded_args in
+      let embedded_args_types = List.map type_of embedded_args in
       if target = output_type then
         if embedded_args_types = f_in_types then
           (* f has the right type and the types of the arguments have not changed after trying an embedding *)
@@ -755,7 +686,7 @@ let f6 =
     zero])
 
 (*
-forall (x y : int) (f : int -> int) (g : int -> int) (h : int -> nat) (w : nat -> T),
+forall (x y : int) (f g : int -> int) (h : int -> nat) (w : nat -> T),
   x <? y * g (1 + f (x + y)) --> w (h x) =? w (h (f (y + 0))).
 *)
 let f7 =
@@ -781,6 +712,10 @@ let f7 =
         App (w, [App (h, [x])]);
         App (w, [App (h, [App (f, [App (add c_int, [y; zero])])])])])])])
 
+(*
+forall (x y : int) (f g : int -> int),
+  f (g x) + g y = g y + f (g x).
+*)
 let f8 =
   let x = Var ("x", c_int) in
   let y = Var ("y", c_int) in
@@ -791,6 +726,10 @@ let f8 =
     App (add c_int, [App (g, [y]); App (f, [App (g, [x])])])
   ])
 
+(*
+forall x y : int,
+  x = y -> x = 0 -> y = 0.
+*)
 let f9 =
   let x = Var ("x", c_int) in
   let y = Var ("y", c_int) in
@@ -803,6 +742,10 @@ let f9 =
     ])
   ])
 
+(*
+forall x y : int,
+  x = y -> is_true (x == 0) -> y = 0.
+*)
 let f10 =
   let x = Var ("x", c_int) in
   let y = Var ("y", c_int) in
@@ -815,6 +758,10 @@ let f10 =
     ])
   ])
 
+(*
+forall (a : Prop) (b : bool),
+  is_true b /\ ~ (is_true b) \/ a -> ~ (b = true) /\ b = false.
+*)
 let f11 =
   let a = Var ("a", TProp) in
   let b = Var ("b", Tbool) in
@@ -828,15 +775,36 @@ let f11 =
       App (c_not, [App (eq Tbool, [b; b_true])]);
       App (eq Tbool, [b; b_false])])])
 
+(*
+forall (y : int) (f : int -> int),
+  (forall x : int, f (x+1) = f x + 1) -> f (y + 2) = f y + 2.
+*)
+let f12 =
+  let x = Var ("x", c_int) in
+  let y = Var ("y", c_int) in
+  let one = Const ("1", c_int) in
+  let two = Const ("2", c_int) in
+  let f = Var ("f", Tarrow { in_types = [c_int]; out_type = c_int }) in
+  App (impl, [
+    Forall ("x", c_int,
+      App (eq c_int, [
+        App (f, [App (add c_int, [x; one])]);
+        App (add c_int, [App (f, [x]); one])]));
+    App (eq c_int, [
+      App (f, [App (add c_int, [y; two])]);
+      App (add c_int, [App (f, [y]); two])])])
+
 let test (name, term) =
     Printf.printf "=====*=====*===== TEST %s =====*=====*=====\n" name;
     pprint_term false term;
-    Printf.printf " : %s\n\n" (string_of_coq_type (typecheck term));
+    typecheck term;
+    Printf.printf " : %s\n\n" (string_of_coq_type (type_of term));
     let term' = translate term in
     pprint_endline false term';
     pprint_term true term';
-    Printf.printf " : %s\n\n" (string_of_coq_type (typecheck term'))
+    typecheck term';
+    Printf.printf " : %s\n\n" (string_of_coq_type (type_of term'))
 
 let () =
-  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8; f9; f10; f11] in
+  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8; f9; f10; f11; f12] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
