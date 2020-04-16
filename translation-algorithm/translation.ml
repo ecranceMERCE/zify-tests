@@ -119,6 +119,13 @@ let p_False = Const ("False", TProp)
 
 let is_true = Var ("is_true", Tarrow { in_types = [Tbool]; out_type = TProp })
 
+let c_O = Const ("O", Tname "nat")
+let c_S = Const ("S", Tarrow { in_types = [Tname "nat"]; out_type = Tname "nat" })
+
+let rec mk_nat = function
+  | 0 -> c_O
+  | n -> App (c_S, [mk_nat (n - 1)])
+
 (* pretty printing of terms *)
 
 module StringSet = Set.Make(String)
@@ -168,10 +175,12 @@ let pprint_to_str must_print_types term =
 exception Type_error of string
 
 let input_types_of_function = function
+  | Const (_, Tarrow { in_types; _ })
   | Var (_, Tarrow { in_types; _ }) -> in_types
   | term -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false term)))
 
 let output_type_of_function = function
+  | Const (_, Tarrow { out_type; _ })
   | Var (_, Tarrow { out_type; _ }) -> out_type
   | term -> raise (Type_error (Printf.sprintf "%s is not a function" (pprint_to_str false term)))
 
@@ -253,12 +262,15 @@ let known_functions = Hashtbl.of_seq (List.to_seq
     (equiv, eq Tbool);
     (lt c_int, ltb c_int);
     (eq c_int, eqb c_int);
+    (eq c_nat, eqb c_nat);
     (eq c_T, eqb c_T);
     (eq Tbool, eqb Tbool);
     (mul c_int, mul TZ);
     (add c_int, add TZ);
+    (add c_nat, add TZ);
     (ltb c_int, ltb TZ);
-    (eqb c_int, eqb TZ) ])
+    (eqb c_int, eqb TZ);
+    (eqb c_nat, eqb TZ) ])
 
 (* calls f x until x is None, and returns x *)
 (* useful to go through known_functions several times *)
@@ -275,6 +287,7 @@ let repeat_opt f x =
 exception Embedding_error of string
 
 let name_of_function = function
+  | Const (x, Tarrow _)
   | Var (x, Tarrow _) -> x
   | _ -> failwith "name_of_function"
 
@@ -296,23 +309,48 @@ end)
 
 let logical_connectors = CoqTermSet.of_list [impl; c_or; c_and; c_not; equiv]
 
+let constructors = Hashtbl.of_seq (List.to_seq
+  [ (c_O, Const ("0", TZ));
+    (c_S, Var ("add1", Tarrow { in_types = [TZ]; out_type = TZ })) ])
+
+exception Eval_error
+
+let rec eval_reduce = function
+  | Const ("0", TZ) -> 0
+  | App (Var ("add1", _), [arg]) -> eval_reduce arg + 1
+  | _ -> raise Eval_error
+
+let rec eval = function
+  | App (Var ("add1", _), [arg]) -> App (add TZ, [eval arg; Const ("1", TZ)])
+  | term -> term
+
+let rec embed_constant ~translation_table ~fresh = function
+  | Const (_, _) as const -> Hashtbl.find constructors const
+  | App (Const _ as const, args) ->
+    App (Hashtbl.find constructors const, List.map (embed_constant ~translation_table ~fresh) args)
+  | term -> embed ~target:TZ ~compulsory:true ~translation_table ~fresh term
+
 (* main embedding function: *)
 (* - target is the target type *)
 (* - compulsory indicates if we MUST embed or if we are only trying *)
 (* - translation_table is the hashtable saving all the generated associated values during the process *)
 (* - fresh is the function generating fresh names for associated functions and variables *)
-let rec embed ~target ~compulsory ~translation_table ~fresh = function
+and embed ~target ~compulsory ~translation_table ~fresh = function
   (* Prop constants and their equivalent in bool *)
   | Const (_, TProp) as const when target = Tbool -> if const = p_True then b_true else b_false
 
   (* if the type is already ok, do not change anything *)
   | Const (c, t) as const when t = target -> const
 
-  (* otherwise look for a morphism *)
-  | Const (c, t) as const ->
-    if exists_morphism ~m_from:t ~m_to:target then Const (c, target)
-    else if compulsory then raise (Embedding_error (Printf.sprintf "cannot embed constant %s" c))
-    else const
+  (* otherwise look for a constructor equivalent or morphism *)
+  | Const (c, t) as const -> begin
+    match Hashtbl.find_opt constructors const with
+    | Some (Const (_, t') as const') when t' = target -> const'
+    | _ ->
+      if exists_morphism ~m_from:t ~m_to:target then Const (c, target)
+      else if compulsory then raise (Embedding_error (Printf.sprintf "cannot embed constant %s" c))
+      else const
+  end
 
   (* if the type is already ok, do not change anything *)
   | Var (x, t) as var when t = target -> var
@@ -341,6 +379,13 @@ let rec embed ~target ~compulsory ~translation_table ~fresh = function
         | _ -> (x, t)
       in    
       Forall (x', t', embedded_term)
+  
+  (* constructor application *)
+  | App (Const _, _) as const_app when target = TZ -> begin
+    let embedded_const_app = embed_constant ~translation_table ~fresh const_app in
+    try Const (string_of_int (eval_reduce embedded_const_app), TZ)
+    with Eval_error -> eval embedded_const_app
+  end
   
   (* logical connectors: try to propagate the embedding *)
   (* if everything changed to bool then we change the connector, and if the target is Prop, add `= true` *)
@@ -598,7 +643,8 @@ let f1 =
         App (andb, [b1; App (eqb Tbool, [App (f, [x]); b2])])])])])
 
 (*
-forall x y : int, x * 1 + (y + 0) = 0.
+forall x y : int,
+  x * 1 + (y + 0) = 0.
 *)
 let f2 =
   let x = Var ("x", c_int) in
@@ -794,6 +840,29 @@ let f12 =
       App (f, [App (add c_int, [y; two])]);
       App (add c_int, [App (f, [y]); two])])])
 
+(*
+forall x : nat,
+  S x + 1 = S (x + 1).
+*)
+let f13 =
+  let x = Var ("x", c_nat) in
+  let one = Const ("1", c_nat) in
+  App (eq c_nat, [
+    App (add c_nat, [App (c_S, [x]); one]);
+    App (c_S, [App (add c_nat, [x; one])])])
+
+(*
+1 + 3 + x = x + 4.
+*)
+let f14 =
+  let x = Var ("x", c_nat) in
+  let one = Const ("1", c_nat) in
+  let three = mk_nat 3 in
+  let four = mk_nat 4 in
+  App (eq c_nat, [
+    App (add c_nat, [one; App (add c_nat, [three; x])]);
+    App (add c_nat, [x; four])])
+
 let test (name, term) =
     Printf.printf "=====*=====*===== TEST %s =====*=====*=====\n" name;
     pprint_term false term;
@@ -806,5 +875,5 @@ let test (name, term) =
     Printf.printf " : %s\n\n" (string_of_coq_type (type_of term'))
 
 let () =
-  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8; f9; f10; f11; f12] in
+  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8; f9; f10; f11; f12; f13; f14] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
