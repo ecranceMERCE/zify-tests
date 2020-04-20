@@ -386,7 +386,7 @@ and embed ~target ~compulsory ~translation_table ~fresh = function
     try Const (string_of_int (eval_reduce embedded_const_app), TZ)
     with Eval_error -> eval embedded_const_app
   end
-  
+
   (* logical connectors: try to propagate the embedding *)
   (* if everything changed to bool then we change the connector, and if the target is Prop, add `= true` *)
   (* if one of the arguments stayed in Prop, add `= true` to every argument in bool, but do not change the connector *)
@@ -863,6 +863,66 @@ let f14 =
     App (add c_nat, [one; App (add c_nat, [three; x])]);
     App (add c_nat, [x; four])])
 
+(*
+forall (x : nat) (f : nat -> nat),
+  1 + S (S (f x)) = f x + S (S (S O)).
+*)
+let f15 =
+  let x = Var ("x", c_nat) in
+  let one = Const ("1", c_nat) in
+  let f = Var ("f", Tarrow { in_types = [c_nat]; out_type = c_nat }) in
+  App (eq c_nat, [
+    App (add c_nat, [one; App (c_S, [App (c_S, [App (f, [x])])])]);
+    App (add c_nat, [App (f, [x]); App (c_S, [App (c_S, [App (c_S, [c_O])])])])])
+
+(*
+forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (P : Prop) (b1 b2 : bool),
+  f (S (S (m n)) + S (S O)) = f (S n) * x -> ((is_true (x == y) /\ g (f n) = k y) \/ h (g (f O)) + y * x = 0) \/ (P /\ forall u:int, u = 0) -> is_true ((~~ ~~ ~~b1) && b2 || true).
+*)
+let f16 =
+  let n = Var ("n", c_nat) in
+  let x = Var ("x", c_int) in
+  let y = Var ("y", c_int) in
+  let u = Var ("u", c_int) in
+  let f = Var ("f", Tarrow { in_types = [c_nat]; out_type = c_int }) in
+  let g = Var ("g", Tarrow { in_types = [c_int]; out_type = c_T }) in
+  let h = Var ("h", Tarrow { in_types = [c_T]; out_type = c_int }) in
+  let k = Var ("k", Tarrow { in_types = [c_int]; out_type = c_T }) in
+  let m = Var ("m", Tarrow { in_types = [c_nat]; out_type = c_nat }) in
+  let p = Var ("P", TProp) in
+  let b1 = Var ("b1", Tbool) in
+  let b2 = Var ("b2", Tbool) in
+  let zero = Const ("0", c_int) in
+  App (impl, [
+    App (eq c_int, [
+      App (f, [
+        App (add c_nat, [
+          App (c_S, [App (c_S, [App (m, [n])])]);
+          App (c_S, [App (c_S, [c_O])])])]);
+      App (mul c_int, [
+        App (f, [App (c_S, [n])]);
+        x])]);
+    App (impl, [
+      App (c_or, [
+        App (c_or, [
+          App (c_and, [
+            App (is_true, [App (eqb c_int, [x; y])]);
+            App (eq c_T, [
+              App (g, [App (f, [n])]);
+              App (k, [y])])]);
+          App (eq c_int, [
+            App (add c_int, [
+              App (h, [App (g, [App (f, [c_O])])]);
+              App (mul c_int, [y; x])]);
+            zero])]);
+        App (c_and, [p; Forall ("u", c_int, App (eq c_int, [u; zero]))])]);
+      App (is_true, [
+        App (orb, [
+          App (andb, [
+            App (negb, [App (negb, [App (negb, [b1])])]);
+            b2]);
+          b_true])])])])
+
 let test (name, term) =
     Printf.printf "=====*=====*===== TEST %s =====*=====*=====\n" name;
     pprint_term false term;
@@ -875,5 +935,5 @@ let test (name, term) =
     Printf.printf " : %s\n\n" (string_of_coq_type (type_of term'))
 
 let () =
-  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8; f9; f10; f11; f12; f13; f14] in
+  let test_cases = [f1; f2; f3; f4; f5; f6; f7; f8; f9; f10; f11; f12; f13; f14; f15; f16] in
   List.(iter test @@ combine (init (length test_cases) (fun i -> string_of_int (i + 1))) test_cases)
