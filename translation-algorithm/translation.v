@@ -68,7 +68,7 @@ mkbrel {
     TRInj : forall n m : S, R n m <->  TR (@inj _ _ I n) (inj m)
   }. *)
 
-Variable A : Type.
+(* Variable A : Type.
 Variable x y z : A.
 Axiom xeqy : x = y.
 Axiom yeqz : y = z.
@@ -87,7 +87,64 @@ Ltac embedp :=
 
 Goal x = z -> x = z.
 Proof.
-  embedp.
+  embedp. *)
+
+
+  (* variable modif à false au début, et dès qu'il y a un rewrite ou une modif qq part dans le but on met à vrai *)
+  (* permet de faire le fixpoint de embed *)
+
+Ltac embed term :=
+  match term with
+  | True => idtac (* rewrite true = true *)
+  | False => idtac (* rewrite false = true *)
+  | ?b = false => idtac (* rewrite ~~b = true *)
+  | false = ?b => idtac (* symétrie *)
+  | true = ?b => idtac (* symétrie *)
+  | ?b = true => embed b
+  | ?b1 = true -> ?b2 = true =>
+    embed p1; embed p2;
+    idtac (* rewrite b1 --> b2 = true *)
+  | ?p1 -> ?p2 => embed p1; embed p2
+  | ?b1 = true /\ ?b2 = true =>
+    embed p1; embed p2;
+    idtac (* rewrite b1 && b2 = true *)
+  | ?p1 /\ ?p2 => embed p1; embed p2
+  | ?b1 = true \/ ?b2 = true =>
+    embed p1; embed p2;
+    idtac (* rewrite b1 || b2 = true *)
+  | ?p1 \/ ?p2 => embed p1; embed p2
+  | ?b1 = true <-> ?b2 = true =>
+    embed p1; embed p2;
+    idtac (* rewrite b1 == b2 *)
+  | ?p1 <-> ?p2 => embed p1; embed p2
+  | ~ ?b1 = true =>
+    embed p1; embed p2;
+    idtac (* rewrite ~~b1 = true *)
+  | ~ ?p1 => embed p1
+  | is_true ?t =>
+    embed t;
+    idtac (* rewrite = true *)
+
+  (*
+     constante ok
+     constante autre (constructeur ou pas)
+     variable ok
+     variable autre (morphisme)
+     forall
+     application de constante target Z (S)
+     f args
+        f traduisible
+        f déjà vue
+        f inconnue  
+  *)
+
+  end.
+
+
+Ltac embedp :=
+  match goal with
+  | |- ?g => embed g
+  end.
 
 Variable A B C : Type.
 Variable g : A -> B -> (C -> A) -> B.
