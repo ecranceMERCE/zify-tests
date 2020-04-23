@@ -3,7 +3,7 @@ type coq_type =
   | TProp
   | Tbool
   | TZ
-  | Tarrow of { in_types: coq_type list; out_type: coq_type } (* function types *)
+  | Tarrow of { in_types : coq_type list; out_type : coq_type } (* function types *)
   | Tname of string (* other types *)
 
 (* simplified Coq terms *)
@@ -235,9 +235,9 @@ let typecheck term = ignore (typecheck TypeEnv.empty term)
 
 (* describes an embedding from a type to another, with morphism properties *)
 type morphism =
-  { from_type: coq_type
-  ; to_type: coq_type
-  ; name: string
+  { from_type : coq_type
+  ; to_type : coq_type
+  ; name : string
   }
 
 (* the known morphisms are declared by the user *)
@@ -309,9 +309,14 @@ end)
 
 let logical_connectors = CoqTermSet.of_list [impl; c_or; c_and; c_not; equiv]
 
-let constructors = Hashtbl.of_seq (List.to_seq
-  [ (c_O, Const ("0", TZ));
-    (c_S, Var ("add1", Tarrow { in_types = [TZ]; out_type = TZ })) ])
+type constructor =
+  { constr : coq_term
+  ; embedding : coq_term
+  }
+
+let constructors =
+  [ { constr = c_O; embedding = Const ("0", TZ) };
+    { constr = c_S; embedding = Var ("add1", Tarrow { in_types = [TZ]; out_type = TZ }) } ]
 
 exception Eval_error
 
@@ -325,9 +330,11 @@ let rec eval = function
   | term -> term
 
 let rec embed_constant ~translation_table ~fresh = function
-  | Const (_, _) as const -> Hashtbl.find constructors const
-  | App (Const _ as const, args) ->
-    App (Hashtbl.find constructors const, List.map (embed_constant ~translation_table ~fresh) args)
+  | Const (_, _) as const -> (List.find (fun { constr; _} -> constr = const) constructors).embedding
+  | App (Const _ as const, args) -> App (
+      (List.find (fun { constr; _} -> constr = const) constructors).embedding,
+      List.map (embed_constant ~translation_table ~fresh) args
+    )
   | term -> embed ~target:TZ ~compulsory:true ~translation_table ~fresh term
 
 (* main embedding function: *)
@@ -344,8 +351,8 @@ and embed ~target ~compulsory ~translation_table ~fresh = function
 
   (* otherwise look for a constructor equivalent or morphism *)
   | Const (c, t) as const -> begin
-    match Hashtbl.find_opt constructors const with
-    | Some (Const (_, t') as const') when t' = target -> const'
+    match List.find_opt (fun { constr; _} -> constr = const) constructors with
+    | Some ({ embedding = Const (_, t') as const'; _ }) when t' = target -> const'
     | _ ->
       if exists_morphism ~m_from:t ~m_to:target then Const (c, target)
       else if compulsory then raise (Embedding_error (Printf.sprintf "cannot embed constant %s" c))
