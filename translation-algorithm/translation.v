@@ -93,37 +93,90 @@ Proof.
   (* variable modif à false au début, et dès qu'il y a un rewrite ou une modif qq part dans le but on met à vrai *)
   (* permet de faire le fixpoint de embed *)
 
-Ltac embed term :=
+Variable implb andb orb eqb : bool -> bool -> bool.
+Definition istrue (b : bool) : Prop := b = true.
+
+Axiom TrueB : True <-> true = true.
+Axiom FalseB : False <-> false = true.
+Axiom bfalse_negbtrue : forall b : bool, b = false <-> negb b = true.
+Axiom eq_sym : forall (A : Type) (x y : A), x = y <-> y = x.
+Axiom impl_implb : forall (b1 b2 : bool), (b1 = true -> b2 = true) <-> (implb b1 b2 = true).
+Axiom and_andb : forall (b1 b2 : bool), (b1 = true /\ b2 = true) <-> (andb b1 b2 = true).
+Axiom or_orb : forall (b1 b2 : bool), (b1 = true \/ b2 = true) <-> (orb b1 b2 = true).
+Axiom equiv_eqb : forall (b1 b2 : bool), (b1 = true <-> b2 = true) <-> (eqb b1 b2 = true).
+Axiom not_negb : forall b : bool, ~ b = true <-> negb b = true.
+
+Ltac format_func f args :=
+  match f with
+  | ?f' ?arg => format_func f' (cons arg args)
+  | ?f' => constr:(pair f' args)
+  end.
+
+(*
+*)
+Ltac equals t t' :=
+  match t with
+  | ?u =>
+    match t' with
+    | u => idtac
+    | _ => fail
+    end
+  end.
+
+Ltac not_equals t t' := tryif equals t t' then fail else idtac.
+
+Ltac condition c :=
+  match c with
+  | true => idtac
+  | false => fail
+  end.
+
+Ltac not_condition c := tryif condition c then fail else idtac.
+
+Ltac embed term target compulsory :=
   match term with
-  | True => idtac (* rewrite true = true *)
-  | False => idtac (* rewrite false = true *)
-  | ?b = false => idtac (* rewrite ~~b = true *)
-  | false = ?b => idtac (* symétrie *)
-  | true = ?b => idtac (* symétrie *)
+  | True => rewrite -> TrueB
+  | False => rewrite -> FalseB
+  | ?b = false => rewrite -> (bfalse_negbtrue b)
+  | false = ?b => rewrite -> (eq_sym bool false b)
+  | true = ?b => rewrite -> (eq_sym bool true b)
   | ?b = true => embed b
   | ?b1 = true -> ?b2 = true =>
-    embed p1; embed p2;
-    idtac (* rewrite b1 --> b2 = true *)
+    rewrite -> (impl_implb b1 b2);
+    embed b1; embed b2
   | ?p1 -> ?p2 => embed p1; embed p2
   | ?b1 = true /\ ?b2 = true =>
-    embed p1; embed p2;
-    idtac (* rewrite b1 && b2 = true *)
+    rewrite -> (and_andb b1 b2);
+    embed b1; embed b2
   | ?p1 /\ ?p2 => embed p1; embed p2
   | ?b1 = true \/ ?b2 = true =>
-    embed p1; embed p2;
-    idtac (* rewrite b1 || b2 = true *)
+    rewrite -> (or_orb b1 b2);
+    embed b1; embed b2
   | ?p1 \/ ?p2 => embed p1; embed p2
   | ?b1 = true <-> ?b2 = true =>
-    embed p1; embed p2;
-    idtac (* rewrite b1 == b2 *)
+    rewrite -> (equiv_eqb b1 b2);
+    embed b1; embed b2
   | ?p1 <-> ?p2 => embed p1; embed p2
   | ~ ?b1 = true =>
-    embed p1; embed p2;
-    idtac (* rewrite ~~b1 = true *)
+    rewrite -> (not_negb b1);
+    embed p1; embed p2
   | ~ ?p1 => embed p1
-  | is_true ?t =>
-    embed t;
-    idtac (* rewrite = true *)
+  | istrue ?t =>
+    unfold istrue;
+    embed t
+  | forall (x : ?T), ?t =>
+    tryif (not_equals target Prop; condition compulsory) then
+      fail 1 "a quantifier cannot be embedded into " target
+    else
+      (* si x plongeable, ajouter à la table *)
+      (* embed t *)
+  | ?f ?arg =>
+    let p := format_func f (cons arg nil) in
+    idtac "funcargs = " p
+  | ?t =>
+    let tt := type of t in
+    match tt with
+    | bool =>
 
   (*
      constante ok
@@ -142,9 +195,21 @@ Ltac embed term :=
 
 
 Ltac embedp :=
+  idtac "begin";
   match goal with
-  | |- ?g => embed g
+  | |- ?g => embed g Prop true
   end.
+
+Variable int T : Type.
+Variable Oi : int.
+Variable eqbint : int -> int -> bool.
+Variable mulint addint : int -> int -> int.
+
+Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
+f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> ((istrue (eqbint x y) /\ g (f n) = k y) \/ addint (h (g (f O))) (mulint y x) = Oi) \/ (P /\ forall u:int, u = Oi) -> istrue (negb (negb (negb b1)) && b2 || true).
+Proof.
+  intros n x y f g h k m P b1 b2.
+  embedp.
 
 Variable A B C : Type.
 Variable g : A -> B -> (C -> A) -> B.
