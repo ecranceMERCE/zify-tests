@@ -1,0 +1,7 @@
+-I ./src
+-R ./src Embedding
+src/embedding.ml
+src/embedding.mli
+src/g_embedding.mlg
+src/embedding_plugin.mlpack
+src/Embedding.v

@@ -1,0 +1,15 @@
+{
+
+open Ltac_plugin
+open Stdarg
+open Tacarg
+
+}
+
+DECLARE PLUGIN "embedding_plugin"
+
+TACTIC EXTEND EMBEDDING
+| ["find_embedding_opt" constr(t)] -> { Embedding.tac_find_opt t }
+| ["add_embedding" constr(t) constr(t')] -> { Embedding.tac_add t t' }
+END
+

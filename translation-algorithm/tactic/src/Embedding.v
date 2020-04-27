@@ -1,3 +1,5 @@
+Declare ML Module "embedding_plugin".
+
 Ltac reverse_rec acc l :=
   match l with
   | nil => acc
@@ -39,7 +41,7 @@ Ltac output_type_of_function f :=
   b1 && b2 = true -> b1 /\ b2 = true. *)
 
 Class EmbeddableType (Source : Type) (Target : Type) := mk_emb_type {
-  embed : Source -> Target;
+  embed_type : Source -> Target;
   predicate : Target -> Prop;
   predicate_after_embedding : forall x, predicate (embed x)
 }.
@@ -54,9 +56,7 @@ Class EmbeddableFunction2 (S1 S2 S3 T : Type) (f2 : S1 -> S2 -> S3) {Emb1 : Embe
   p2 : forall (x : S1) (y : S2), embed (f2 x y) = g2 (embed x) (embed y)
 }.
 
-(* forall x y : int, x = y -> y = x.
-x' == y' = true -> y' == x' = true.
-x' == y' --> y' == x' = true
+(*
 
 EmbeddableFunction2 Prop Prop Prop bool /\ _ _ _ =
   g2 := &&
@@ -67,28 +67,6 @@ mkbrel {
     TR : T -> T -> Prop;
     TRInj : forall n m : S, R n m <->  TR (@inj _ _ I n) (inj m)
   }. *)
-
-(* Variable A : Type.
-Variable x y z : A.
-Axiom xeqy : x = y.
-Axiom yeqz : y = z.
-
-Ltac embed term :=
-  match term with
-  | y = z -> y = z => apply yeqz
-  | ?A -> ?B => embed A; embed B
-  | x = z => rewrite -> xeqy
-  end.
-
-Ltac embedp :=
-  match goal with
-  | |- ?g => embed g
-  end.
-
-Goal x = z -> x = z.
-Proof.
-  embedp. *)
-
 
   (* variable modif à false au début, et dès qu'il y a un rewrite ou une modif qq part dans le but on met à vrai *)
   (* permet de faire le fixpoint de embed *)
@@ -112,8 +90,6 @@ Ltac format_func f args :=
   | ?f' => constr:(pair f' args)
   end.
 
-(*
-*)
 Ltac equals t t' :=
   match t with
   | ?u =>
@@ -132,6 +108,12 @@ Ltac condition c :=
   end.
 
 Ltac not_condition c := tryif condition c then fail else idtac.
+
+Ltac option_value o default :=
+  match o with
+  | None => default
+  | Some ?v => v
+  end.
 
 Ltac embed term target compulsory :=
   match term with
@@ -168,22 +150,32 @@ Ltac embed term target compulsory :=
     tryif (not_equals target Prop; condition compulsory) then
       fail 1 "a quantifier cannot be embedded into " target
     else
-      (* si x plongeable, ajouter à la table *)
-      (* embed t *)
+      (embed x; embed t)
   | ?f ?arg =>
     let p := format_func f (cons arg nil) in
     idtac "funcargs = " p
   | ?t =>
-    let tt := type of t in
-    match tt with
-    | bool =>
+    let e := find_embedding_opt t in
+    add_embedding t e;
+    idtac
+    (* let tt := type of t in
+    tryif equals tt target then idtac
+    else
+      let e := find_embedding_opt t in
+      let t' := option_value e t in
+      let tt' := type of t' in
+      tryif equals tt' target then idtac
+      else 
+      let t'' := embed_type 
+      match e with
+      | Some ?t' => 
+      | None => embed_type tt target t *)
 
   (*
      constante ok
      constante autre (constructeur ou pas)
      variable ok
      variable autre (morphisme)
-     forall
      application de constante target Z (S)
      f args
         f traduisible
@@ -205,74 +197,11 @@ Variable Oi : int.
 Variable eqbint : int -> int -> bool.
 Variable mulint addint : int -> int -> int.
 
-Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
+(* Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
 f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> ((istrue (eqbint x y) /\ g (f n) = k y) \/ addint (h (g (f O))) (mulint y x) = Oi) \/ (P /\ forall u:int, u = Oi) -> istrue (negb (negb (negb b1)) && b2 || true).
 Proof.
   intros n x y f g h k m P b1 b2.
-  embedp.
-
-Variable A B C : Type.
-Variable g : A -> B -> (C -> A) -> B.
-
-Goal True.
-Proof.
-  let u := uncurry g in
-  let a := input_types_of_function g in
-  let b := output_type_of_function g in
-  pose u; pose a; pose b.
-
-
-(*
-forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (P : Prop) (b1 b2 : bool),
-  f (S (S (m n)) + S (S O)) = f (S n) * x -> ((is_true (x == y) /\ g (f n) = k y) \/ h (g (f O)) + y * x = 0) \/ (P /\ forall u:int, u = 0) -> is_true ((~~ ~~ ~~b1) && b2 || true).
-
-*)
-
-Require Import ZArith.
-
-
-
-(* Variable f : nat -> Z. *)
-(* Variable predNZ : Z -> Prop. *)
-Axiom cstrNZ : forall x : nat, predNZ (f x).
-
-Instance itNZ : InjTyp nat Z := {|
-  inj := f;
-  pred := predNZ;
-  cstr := cstrNZ
-|}.
-
-(* tous les : if exists morphism t t' then create term Var (fresh x, t') *)
-(* deviennent : *)
-
-(* get_table v : tactique OCaml qui cherche dans la table des variables *)
-
-Ltac embed_morph v := first [ embed_morph_table v | embed_morph_no_table v ].
-
-Ltac embed_morph_table v :=
-  let v' := get_table v in
-  repeat
-    match goal with
-    | |- context[v] =>
-      
-
-Ltac embed_morph_no_table v := try
-  let u := constr:(inj v) in
-  repeat
-    match goal with
-    | |- context[v] =>
-      let h := fresh in
-      pose (h := u).
-
-
-(* Ltac embed_morph i :=
-  try let u := constr:(inj i) in
-      let h := fresh in
-      pose (h := u).
-
-Goal forall x, x = 0.
-Proof.
-  embed_morph 2. *)
+  embedp. *)
 
 (*
 let known_functions = Hashtbl.of_seq (List.to_seq
@@ -290,27 +219,5 @@ let known_functions = Hashtbl.of_seq (List.to_seq
     (eq c_int, eq TZ) ])
 *)
 
-Class BinOp {S1 S2 S3:Type} {T:Type} (Op : S1 -> S2 -> S3) {I1 : InjTyp S1 T} {I2 : InjTyp S2 T} {I3 : InjTyp S3 T} :=
-  mkbop {
-      (* [TBOp] is the target operator after injection of operands. *)
-      TBOp : T -> T -> T;
-      (* [TBOpInj] states the correctness of the injection. *)
-      TBOpInj : forall (n:S1) (m:S2), inj (Op n m) = TBOp (inj n) (inj m)
-    }.
-
-Class KnownFunction {S : Type} (f : _ -> S) (T : Type) :=
-  mkkf {
-    f' : _ -> T;
-    kfinj : forall args : _, inj (f args) = f' (map inj args)
-  }.
-
-(* fonction Ltac (T1 -> ... -> Tn-1 -> Tn) -> ([T1; ...; Tn-1], Tn) ou alors changement de l'algo pour raisonner sur des fonctions *)
-
 (* savoir quand c'est une constante et quand c'est une variable pour traiter le cas Const *)
 (* CstOp peut être intéressant à garder pour injecter directement des constantes connues ? *)
-
-(* est-ce qu'on reste en bool -> Prop, ou on fait un Prop -> bool ? *)
-(* réussir à faire passer les opérateurs logiques dans les classes qui décrivent les fonctions connues *)
-
-(* translation table = table construite à la volée, utilisable en Ltac ? *)
-(* terminaison de repeat_opt (appeler f sur x tant qu'elle ne renvoie pas None) *)
