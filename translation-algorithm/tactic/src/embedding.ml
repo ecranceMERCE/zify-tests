@@ -1,2 +1,5 @@
-let add_embedding t = ()
-let find_embedding_opt t = None
+(* open Pp *)
+(* open Ltac_plugin *)
+
+let tac_add t t' = Tacticals.New.tclIDTAC
+let tac_find_opt t = Proofview.tclUNIT None

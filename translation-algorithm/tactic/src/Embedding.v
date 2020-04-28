@@ -119,33 +119,33 @@ Ltac embed term target compulsory :=
   match term with
   | True => rewrite -> TrueB
   | False => rewrite -> FalseB
-  | ?b = false => rewrite -> (bfalse_negbtrue b)
-  | false = ?b => rewrite -> (eq_sym bool false b)
-  | true = ?b => rewrite -> (eq_sym bool true b)
-  | ?b = true => embed b
+  | ?b = false => rewrite -> (bfalse_negbtrue b); embed b bool true
+  | false = ?b => rewrite -> (eq_sym bool false b); embed b bool true
+  | true = ?b => rewrite -> (eq_sym bool true b); embed b bool true
+  | ?b = true => embed b bool true
   | ?b1 = true -> ?b2 = true =>
     rewrite -> (impl_implb b1 b2);
-    embed b1; embed b2
-  | ?p1 -> ?p2 => embed p1; embed p2
+    embed b1 bool true; embed b2 bool true
+  | ?p1 -> ?p2 => embed p1 Prop true; embed p2 Prop true
   | ?b1 = true /\ ?b2 = true =>
     rewrite -> (and_andb b1 b2);
-    embed b1; embed b2
-  | ?p1 /\ ?p2 => embed p1; embed p2
+    embed b1 bool true; embed b2 bool true
+  | ?p1 /\ ?p2 => embed p1 Prop true; embed p2 Prop true
   | ?b1 = true \/ ?b2 = true =>
     rewrite -> (or_orb b1 b2);
-    embed b1; embed b2
-  | ?p1 \/ ?p2 => embed p1; embed p2
+    embed b1 bool true; embed b2 bool true
+  | ?p1 \/ ?p2 => embed p1 Prop true; embed p2 Prop true
   | ?b1 = true <-> ?b2 = true =>
     rewrite -> (equiv_eqb b1 b2);
-    embed b1; embed b2
-  | ?p1 <-> ?p2 => embed p1; embed p2
-  | ~ ?b1 = true =>
-    rewrite -> (not_negb b1);
-    embed p1; embed p2
-  | ~ ?p1 => embed p1
+    embed b1 bool true; embed b2 bool true
+  | ?p1 <-> ?p2 => embed p1 Prop true; embed p2 Prop true
+  | ~ ?b = true =>
+    rewrite -> (not_negb b);
+    embed b bool true
+  | ~ ?p => embed p Prop true
   | istrue ?t =>
     unfold istrue;
-    embed t
+    embed t bool true
   | forall (x : ?T), ?t =>
     tryif (not_equals target Prop; condition compulsory) then
       fail 1 "a quantifier cannot be embedded into " target

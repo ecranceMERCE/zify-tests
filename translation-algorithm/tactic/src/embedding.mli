@@ -1,4 +1,2 @@
-open Constrexpr
-
-val add_embedding : constr_expr -> unit Proofview.tactic
-val find_embedding_opt : constr_expr -> constr_expr option
+val tac_add : EConstr.t -> EConstr.t -> unit Proofview.tactic
+val tac_find_opt : EConstr.t -> EConstr.t option Proofview.tactic
