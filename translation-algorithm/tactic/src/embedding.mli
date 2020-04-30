@@ -1,2 +1,5 @@
-val tac_add : EConstr.t -> EConstr.t -> unit Proofview.tactic
-val tac_find_opt : EConstr.t -> EConstr.t option Proofview.tactic
+module IntegerType : sig
+  val register : Constrexpr.constr_expr -> unit
+end
+
+val tac_is_integertype : EConstr.t -> unit Proofview.tactic

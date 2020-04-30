@@ -1,4 +1,4 @@
-Declare ML Module "embedding_plugin".
+(* Declare ML Module "embedding_plugin". *)
 
 Ltac reverse_rec acc l :=
   match l with
@@ -12,6 +12,26 @@ Ltac reverse l :=
   match t with
   | list ?T => reverse_rec (@nil T) l
   | _ => fail "cannot reverse a non-list term"
+  end.
+
+Ltac map_rec f acc l :=
+  match l with
+  | nil => acc
+  | cons ?hd ?tl =>
+    let hd' := f hd in
+    map_rec f (cons hd' acc) tl
+  end.
+
+Ltac map f l :=
+  let l' := map_rec f nil l in
+  reverse l'.
+
+Ltac foldl f acc l :=
+  match l with
+  | nil => acc
+  | cons ?hd ?tl =>
+    let acc' := f acc hd in
+    foldl f acc' tl
   end.
 
 Ltac uncurry_rec input_types t :=
@@ -37,39 +57,72 @@ Ltac output_type_of_function f :=
   let t' := eval compute in (snd t) in
   t'.
 
+Ltac get_head x := lazymatch x with ?x _ => get_head x | _ => x end.
+Ltac inverse_tactic tactic := try (tactic; fail 1).
+Ltac constr_neq t u := inverse_tactic ltac:(constr_eq t u).
+Ltac is_not_constructor U sym :=
+  let H := fresh in
+  assert (U -> True) as H by
+         (let x := fresh in
+          let y := fresh in
+          intro x;
+          pose x as y;
+          destruct x;
+          let C := eval unfold y in y in
+          let c := get_head C in
+          constr_neq sym c;
+          exact I); clear H.
+Ltac is_constructor U sym := inverse_tactic ltac:(is_not_constructor U sym).
+
 (* Lemma and_andb : forall b1 b2 : bool,
   b1 && b2 = true -> b1 /\ b2 = true. *)
 
-Class EmbeddableType (Source : Type) (Target : Type) := mk_emb_type {
-  embed_type : Source -> Target;
-  predicate : Target -> Prop;
-  predicate_after_embedding : forall x, predicate (embed x)
+Require Import ZArith.
+
+Class IntegerType (T : Type) := {
+  to_Z : T -> Z;
+  of_Z : Z -> T;
+  pred : Z -> Prop;
+  id1 : forall x : T, of_Z (to_Z x) = x;
+  id2 : forall z : Z, to_Z (of_Z z) = z;
+  inj_to_Z : forall z : Z, exists x : T, z = to_Z x;
+  inj_of_Z : forall x : T, exists z : Z, x = of_Z z;
+  pred_in_Z : forall x : T, pred (to_Z x)
 }.
 
-Class EmbeddableFunction1 (S1 S2 T : Type) (f1 : S1 -> S2) {Emb1 : EmbeddableType S1 T} {Emb2 : EmbeddableType S2 T} := mk_emb_func1 {
-  g1 : T -> T;
-  p1 : forall (x : S1), embed (f1 x) = g1 (embed x)
+Lemma forall_embedding : forall (T : Type) {IntT : IntegerType T} (P : T -> Prop),
+  (forall x : T, P x) <-> (forall z : Z, P (of_Z z)).
+Proof.
+  split.
+  - intros H z.
+    pose proof (inj_to_Z z) as [x Hx].
+    rewrite -> Hx.
+    rewrite -> (id1 x).
+    apply H.
+  - intros H x.
+    pose proof (inj_of_Z x) as [z Hz].
+    rewrite -> Hz.
+    apply H.
+Qed.
+
+Ltac is_integertype x :=
+  let t := fresh in
+  tryif pose (t := (T2Z x)) then clear t; idtac else fail.
+
+Class IntegerFunc1 (T1 T2 : Type) (f1 : T1 -> T2) {IntT1 : IntegerType T1} {IntT2 : IntegerType T2} := {
+  g1 : Z -> Z;
+  f_to_g_1 : forall x : T1, to_Z (f1 x) = g1 (to_Z x)
 }.
 
-Class EmbeddableFunction2 (S1 S2 S3 T : Type) (f2 : S1 -> S2 -> S3) {Emb1 : EmbeddableType S1 T} {Emb2 : EmbeddableType S2 T} {Emb3 : EmbeddableType S3 T} := mk_emb_func2 {
-  g2 : T -> T -> T;
-  p2 : forall (x : S1) (y : S2), embed (f2 x y) = g2 (embed x) (embed y)
+Class IntegerFunc2 (T1 T2 T3 : Type) (f1 : T1 -> T2 -> T3) {IntT1 : IntegerType T1} {IntT2 : IntegerType T2} {IntT3 : IntegerType T3} := {
+  g2 : Z -> Z -> Z;
+  f_to_g_2 : forall (x : T1) (y : T2), to_Z (f2 x y) = g2 (to_Z x) (to_Z y)
 }.
 
-(*
-
-EmbeddableFunction2 Prop Prop Prop bool /\ _ _ _ =
-  g2 := &&
-  forall (x y : Prop), embed (x /\ y) = embed x && embed y *)
-
-(* Class BinaryRelation {S:Type} {T:Type} (R : S -> S -> Prop) {I : InjTyp S T}  :=
-mkbrel {
-    TR : T -> T -> Prop;
-    TRInj : forall n m : S, R n m <->  TR (@inj _ _ I n) (inj m)
-  }. *)
-
-  (* variable modif à false au début, et dès qu'il y a un rewrite ou une modif qq part dans le but on met à vrai *)
-  (* permet de faire le fixpoint de embed *)
+Class IntegerBinaryRelation (T : Type) (rel : T -> T -> Prop) {IntT : IntegerType T} := {
+  relb_Z : Z -> Z -> bool;
+  rel_to_relb_Z : forall x y : T, rel x y <-> relb_Z (to_Z x) (to_Z y) = true
+}.
 
 Variable implb andb orb eqb : bool -> bool -> bool.
 Definition istrue (b : bool) : Prop := b = true.
@@ -115,76 +168,93 @@ Ltac option_value o default :=
   | Some ?v => v
   end.
 
-Ltac embed term target compulsory :=
-  match term with
-  | True => rewrite -> TrueB
-  | False => rewrite -> FalseB
-  | ?b = false => rewrite -> (bfalse_negbtrue b); embed b bool true
-  | false = ?b => rewrite -> (eq_sym bool false b); embed b bool true
-  | true = ?b => rewrite -> (eq_sym bool true b); embed b bool true
-  | ?b = true => embed b bool true
-  | ?b1 = true -> ?b2 = true =>
-    rewrite -> (impl_implb b1 b2);
-    embed b1 bool true; embed b2 bool true
-  | ?p1 -> ?p2 => embed p1 Prop true; embed p2 Prop true
-  | ?b1 = true /\ ?b2 = true =>
-    rewrite -> (and_andb b1 b2);
-    embed b1 bool true; embed b2 bool true
-  | ?p1 /\ ?p2 => embed p1 Prop true; embed p2 Prop true
-  | ?b1 = true \/ ?b2 = true =>
-    rewrite -> (or_orb b1 b2);
-    embed b1 bool true; embed b2 bool true
-  | ?p1 \/ ?p2 => embed p1 Prop true; embed p2 Prop true
-  | ?b1 = true <-> ?b2 = true =>
-    rewrite -> (equiv_eqb b1 b2);
-    embed b1 bool true; embed b2 bool true
-  | ?p1 <-> ?p2 => embed p1 Prop true; embed p2 Prop true
-  | ~ ?b = true =>
-    rewrite -> (not_negb b);
-    embed b bool true
-  | ~ ?p => embed p Prop true
-  | istrue ?t =>
-    unfold istrue;
-    embed t bool true
-  | forall (x : ?T), ?t =>
-    tryif (not_equals target Prop; condition compulsory) then
-      fail 1 "a quantifier cannot be embedded into " target
-    else
-      (embed x; embed t)
-  | ?f ?arg =>
-    let p := format_func f (cons arg nil) in
-    idtac "funcargs = " p
-  | ?t =>
-    let e := find_embedding_opt t in
-    add_embedding t e;
-    idtac
-    (* let tt := type of t in
-    tryif equals tt target then idtac
-    else
-      let e := find_embedding_opt t in
-      let t' := option_value e t in
-      let tt' := type of t' in
-      tryif equals tt' target then idtac
-      else 
-      let t'' := embed_type 
-      match e with
-      | Some ?t' => 
-      | None => embed_type tt target t *)
-
-  (*
-     constante ok
-     constante autre (constructeur ou pas)
-     variable ok
-     variable autre (morphisme)
-     application de constante target Z (S)
-     f args
-        f traduisible
-        f déjà vue
-        f inconnue  
-  *)
-
+Ltac find_arg arg :=
+  match arg with
+  | of_Z ?x => pair true x
+  | ?x => pair false x
   end.
 
+Ltac find_args_under_f args := map find_arg args.
+
+Ltac generate_name acc arg :=
+  match acc with
+  | cons ?n _ =>
+    let n' := fresh n in
+    cons n' acc
+  end.
+
+Ltac generate_names args :=
+  let n := fresh in
+  foldl generate_name (cons n nil) args.
+
+Ltac make_term t args :=
+  match args with
+  | nil => t
+  | cons ?hd ?tl => make_term (t hd) tl
+  end.
+
+Ltac make_function names t :=
+  match names with
+  | nil => t
+  | cons ?hd ?tl => make_function tl (fun hd => t)
+  end.
+
+Ltac make_embeddings :=
+  repeat
+    match goal with
+    | |- context[True] => rewrite -> TrueB
+    | |- context[False] => rewrite -> FalseB
+    | |- context[?b = false] => rewrite -> (bfalse_negbtrue b)
+    | |- context[false = ?b] => rewrite -> (eq_sym bool false b)
+    | |- context[true = ?b] => rewrite -> (eq_sym bool true b)
+    | |- context[?b1 = true -> ?b2 = true] => rewrite -> (impl_implb b1 b2)
+    | |- context[?b1 = true /\ ?b2 = true] => rewrite -> (and_andb b1 b2)
+    | |- context[?b1 = true \/ ?b2 = true] => rewrite -> (or_orb b1 b2)
+    | |- context[?b1 = true <-> ?b2 = true] => rewrite -> (equiv_eqb b1 b2)
+    | |- context[~ ?b = true] => rewrite -> (not_negb b)
+    | |- context[istrue ?t] => unfold istrue
+    | |- context[forall (x : ?T), ?t] => (* case : forall *)
+      (* generalise, find ?P such that t = P x => forall z : Z, P (of_Z z) *)
+      try rewrite -> (forall_embedding T P)
+    | |- context[?f ?arg] => (* case : binary relations *)
+      let p := format_func f (cons arg nil) in
+      let f := constr:(fst p) in
+      let args := constr:(snd p) in
+      match args with
+      | cons ?x (cons ?y nil) =>
+        (* rel x y => relb_Z (to_Z x) (to_Z y) = true *)
+        try rewrite -> (rel_to_relb_Z x y)
+      end
+    | |- context[to_Z ?t] =>
+      match t with
+      | ?f ?arg =>
+        let p := format_func f (cons arg nil) in
+        let f := constr:(fst p) in
+        let args := constr:(snd p) in
+        tryif match args with
+        | cons ?x nil => (* case : known functions with 1 argument *)
+          (* forall x : T1, to_Z (f1 x) = g1 (to_Z x) *)
+          rewrite -> (f_to_g_1 x)
+        | cons ?x (cons ?y nil) => (* case : known functions with 2 arguments *)
+          (* forall (x : T1) (y : T2), to_Z (f2 x y) = g2 (to_Z x) (to_Z y) *)
+          rewrite -> (f_to_g_2 x y)
+        end then
+          idtac
+        else (* case : unknown functions *)
+          let args' := find_args_under_f args in
+          let names := generate_names args' in
+          let t' := make_term f args in
+          let f'_body := make_function names (to_Z t') in
+          (* TODO *)
+          (* change to_Z (f ...args) with f' ...args everywhere in the goal *)
+          idtac
+      (* the rewritings make the embeddings go as down as possible, ending in this case where we just rename *)
+      | ?x => (* case : variables *)
+        (* rename z : Z := to_Z x and change every occurrence in the goal *)
+        idtac
+      end
+    end.
+    (* TODO constructors *)
 
 Ltac embedp :=
   idtac "begin";
