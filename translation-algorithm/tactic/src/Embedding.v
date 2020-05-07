@@ -107,14 +107,14 @@ Qed.
 
 Ltac is_integertype x :=
   let t := fresh in
-  tryif pose (t := (T2Z x)) then clear t; idtac else fail.
+  tryif pose (t := (to_Z x)) then clear t; idtac else fail.
 
 Class IntegerFunc1 (T1 T2 : Type) (f1 : T1 -> T2) {IntT1 : IntegerType T1} {IntT2 : IntegerType T2} := {
   g1 : Z -> Z;
   f_to_g_1 : forall x : T1, to_Z (f1 x) = g1 (to_Z x)
 }.
 
-Class IntegerFunc2 (T1 T2 T3 : Type) (f1 : T1 -> T2 -> T3) {IntT1 : IntegerType T1} {IntT2 : IntegerType T2} {IntT3 : IntegerType T3} := {
+Class IntegerFunc2 (T1 T2 T3 : Type) (f2 : T1 -> T2 -> T3) {IntT1 : IntegerType T1} {IntT2 : IntegerType T2} {IntT3 : IntegerType T3} := {
   g2 : Z -> Z -> Z;
   f_to_g_2 : forall (x : T1) (y : T2), to_Z (f2 x y) = g2 (to_Z x) (to_Z y)
 }.
@@ -170,8 +170,8 @@ Ltac option_value o default :=
 
 Ltac find_arg arg :=
   match arg with
-  | of_Z ?x => pair true x
-  | ?x => pair false x
+  | of_Z ?x => constr:(pair true x)
+  | ?x => constr:(pair false x)
   end.
 
 Ltac find_args_under_f args := map find_arg args.
@@ -180,7 +180,7 @@ Ltac generate_name acc arg :=
   match acc with
   | cons ?n _ =>
     let n' := fresh n in
-    cons n' acc
+    constr:(cons n' acc)
   end.
 
 Ltac generate_names args :=
@@ -215,7 +215,8 @@ Ltac make_embeddings :=
     | |- context[istrue ?t] => unfold istrue
     | |- context[forall (x : ?T), ?t] => (* case : forall *)
       (* generalise, find ?P such that t = P x => forall z : Z, P (of_Z z) *)
-      try rewrite -> (forall_embedding T P)
+      (* try rewrite -> (forall_embedding T P) *)
+      idtac
     | |- context[?f ?arg] => (* case : binary relations *)
       let p := format_func f (cons arg nil) in
       let f := constr:(fst p) in
@@ -244,34 +245,50 @@ Ltac make_embeddings :=
           let args' := find_args_under_f args in
           let names := generate_names args' in
           let t' := make_term f args in
-          let f'_body := make_function names (to_Z t') in
-          (* TODO *)
+          let f' := make_function names (to_Z t') in
           (* change to_Z (f ...args) with f' ...args everywhere in the goal *)
-          idtac
+          repeat
+            match goal with
+            | |- context[to_Z ?t''] =>
+              match t'' with
+              | ?f'' ?arg'' =>
+                let p := format_func f'' (cons arg'' nil) in
+                let f'' := constr:(fst p) in
+                let args'' := constr:(snd p) in
+                constr_eq f f'';
+                let args := find_args_under_f args'' in
+                let t'' := make_term f' args in
+                change (to_Z t) with t''
+              end
+            end
       (* the rewritings make the embeddings go as down as possible, ending in this case where we just rename *)
       | ?x => (* case : variables *)
         (* rename z : Z := to_Z x and change every occurrence in the goal *)
-        idtac
+        let z := fresh in
+        pose (z := to_Z x);
+        repeat
+          match goal with
+          | |- context[to_Z x] => change (to_Z x) with z
+          end
       end
     end.
     (* TODO constructors *)
 
-Ltac embedp :=
-  idtac "begin";
-  match goal with
-  | |- ?g => embed g Prop true
-  end.
+From mathcomp Require Import all_ssreflect.
 
-Variable int T : Type.
-Variable Oi : int.
-Variable eqbint : int -> int -> bool.
-Variable mulint addint : int -> int -> int.
+(* Instance int_integertype : IntegerType int := {|
+  to_Z := 
+  of_Z :=
+  pred :=
+  id1 :=
+  id2 :=
+
+|}. *)
 
 (* Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
 f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> ((istrue (eqbint x y) /\ g (f n) = k y) \/ addint (h (g (f O))) (mulint y x) = Oi) \/ (P /\ forall u:int, u = Oi) -> istrue (negb (negb (negb b1)) && b2 || true).
 Proof.
-  intros n x y f g h k m P b1 b2.
-  embedp. *)
+  intros n x y f g h k m P b1 b2. *)
 
 (*
 let known_functions = Hashtbl.of_seq (List.to_seq
