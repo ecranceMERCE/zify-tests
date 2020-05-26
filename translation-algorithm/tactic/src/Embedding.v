@@ -1,4 +1,27 @@
-(* Declare ML Module "embedding_plugin". *)
+Declare ML Module "embedding_plugin".
+
+Goal True.
+Proof.
+  let v := findv in
+  pose (u := v).
+  reflexivity.
+Qed.
+
+(*
+Ltac t := idtac "hello".
+
+Ltac t2 :=
+  tryif t then
+    constr:(3)
+  else
+    constr:(2).
+
+Goal True.
+Proof.
+  let u := t2 in
+  let h := fresh in
+  pose (h := u);
+  idtac.
 
 Ltac reverse_rec acc l :=
   match l with
@@ -199,6 +222,81 @@ Ltac make_function names t :=
   | cons ?hd ?tl => make_function tl (fun hd => t)
   end.
 
+Ltac manage_S_rec n t :=
+  lazymatch t with
+  | S ?t' => manage_S_rec (n + 1)%Z t'
+  | O => eval compute in n
+  | ?x =>
+    let n' := eval compute in n in
+    constr:((to_Z x + n')%Z)
+  end.
+
+Ltac manage_S t := manage_S_rec 0%Z t.
+
+Ltac embed t :=
+  match t with
+  | True => constr:(true = true)
+  | False => constr:(false = true)
+  | ?b = false =>
+    let b' := embed b in
+    constr:(negb b' = true)
+  | false = ?b =>
+    let b' := embed b in
+    constr:(negb b' = true)
+  | true = ?b =>
+    let b' := embed b in
+    constr:(b' = true)
+  | ~ ?b = true =>
+    let b' := embed b in
+    constr:(negb b' = true)
+  | ?t1 -> ?t2 =>
+    let t1' := embed t1 in
+    let t2' := embed t2 in
+    match t1', t2' with
+    | ?t1'' = true, ?t2'' = true => constr:(implb t1'' t2'' = true)
+    | _ => constr:(t1' -> t2')
+    end
+  | ?t1 /\ ?t2 =>
+    let t1' := embed t1 in
+    let t2' := embed t2 in
+    match t1', t2' with
+    | ?t1'' = true, ?t2'' = true => constr:(andb t1'' t2'' = true)
+    | _ => constr:(t1' /\ t2')
+    end
+  | ?t1 \/ ?t2 =>
+    let t1' := embed t1 in
+    let t2' := embed t2 in
+    match t1', t2' with
+    | ?t1'' = true, ?t2'' = true => constr:(orb t1'' t2'' = true)
+    | _ => constr:(t1' \/ t2')
+    end
+  | ?t1 <-> ?t2 =>
+    let t1' := embed t1 in
+    let t2' := embed t2 in
+    match t1', t2' with
+    | ?t1'' = true, ?t2'' = true => constr:(eqb t1'' t2'' = true)
+    | _ => constr:(t1' <-> t2')
+    end
+  | forall (x : ?T), ?t =>
+    let t' := embed t in
+    constr:(forall (x : T), t')
+  | istrue ?t =>
+    let t' := embed t in
+    constr:(t' = true)
+  | S ?x =>
+    let t' := manage_S (S x) in
+    embed t'
+  | ?f ?arg =>
+    let p := format_func f (cons arg nil) in
+    let f := constr:(fst p) in
+    let args := constr:(snd p) in
+
+  | ?x =>
+    let tx := type of x in
+    match tx with
+    | 
+  end.
+
 Ltac make_embeddings :=
   repeat
     match goal with
@@ -308,3 +406,4 @@ let known_functions = Hashtbl.of_seq (List.to_seq
 
 (* savoir quand c'est une constante et quand c'est une variable pour traiter le cas Const *)
 (* CstOp peut être intéressant à garder pour injecter directement des constantes connues ? *)
+*)

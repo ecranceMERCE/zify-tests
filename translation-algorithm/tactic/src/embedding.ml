@@ -1,4 +1,4 @@
-open Pp
+(* open Pp
 (* open Ltac_plugin *)
 
 module ConstrSet = Set.Make (struct
@@ -15,3 +15,16 @@ end
 let tac_is_integertype t =
   if ConstrSet.mem t !IntegerType.integertypes then Tacticals.New.tclIDTAC
   else Tacticals.New.tclFAIL 1 (str "")
+
+*)
+open Ltac_plugin
+open Tacentries
+open Geninterp
+
+let () =
+  (* let open EConstr in
+  let open UnivGen in *)
+  let t_O = snd @@ Evarutil.new_global Evd.empty @@ Coqlib.lib_ref "Coq.Init.Datatypes.O" in
+  let open Val in
+  let retval = inject (Base (create "nat")) t_O in
+  ml_val_tactic_extend ~plugin:"embedding_plugin" ~name:"findv" ~local:true MLTyNil (Ftactic.return retval)
