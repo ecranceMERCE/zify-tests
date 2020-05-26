@@ -1,5 +1,4 @@
-(* open Pp
-(* open Ltac_plugin *)
+(*
 
 module ConstrSet = Set.Make (struct
   type t = Constrexpr.constr_expr
@@ -17,7 +16,6 @@ let tac_is_integertype t =
   else Tacticals.New.tclFAIL 1 (str "")
 
 *)
-open Ltac_plugin
 open Tacentries
 open Geninterp
 

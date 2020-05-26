@@ -1,4 +1,4 @@
-Declare ML Module "embedding_plugin".
+From Embedding Require Import Loader.
 
 Goal True.
 Proof.

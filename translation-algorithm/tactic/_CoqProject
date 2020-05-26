@@ -1,0 +1,10 @@
+-I src
+-R theories Embedding
+
+theories/Loader.v
+theories/Embedding.v
+
+src/embedding.mli
+src/embedding.ml
+src/g_embedding.mlg
+src/embedding_plugin.mlpack

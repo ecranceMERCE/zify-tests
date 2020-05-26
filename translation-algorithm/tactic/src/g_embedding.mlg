@@ -1,17 +1,5 @@
-{
-
-(* open Ltac_plugin *)
-open Stdarg
-(* open Tacarg *)
-
-}
-
 DECLARE PLUGIN "embedding_plugin"
 
-VERNAC COMMAND EXTEND DECLAREEMBEDDING CLASSIFIED AS SIDEFF
-| ["Add" "IntegerType" constr(t) ] -> { Embedding.IntegerType.register t }
-END
-
-TACTIC EXTEND EMBEDDING
-| ["is_integertype" constr(t)] -> { Embedding.tac_is_integertype t }
-END
+(* {
+  open Ltac_plugin
+} *)
