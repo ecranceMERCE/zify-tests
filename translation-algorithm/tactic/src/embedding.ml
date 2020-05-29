@@ -16,6 +16,8 @@ let tac_is_integertype t =
   else Tacticals.New.tclFAIL 1 (str "")
 
 *)
+[@@@ocaml.warning "-33"]
+open Ltac_plugin
 open Tacentries
 open Geninterp
 

@@ -1,13 +1,12 @@
-From Embedding Require Import Loader.
+(* From Embedding Require Import Loader. *)
 
-Goal True.
+(* Goal True.
 Proof.
   let v := findv in
   pose (u := v).
   reflexivity.
 Qed.
 
-(*
 Ltac t := idtac "hello".
 
 Ltac t2 :=
@@ -95,7 +94,7 @@ Ltac is_not_constructor U sym :=
           let c := get_head C in
           constr_neq sym c;
           exact I); clear H.
-Ltac is_constructor U sym := inverse_tactic ltac:(is_not_constructor U sym).
+Ltac is_constructor U sym := inverse_tactic ltac:(is_not_constructor U sym). *)
 
 (* Lemma and_andb : forall b1 b2 : bool,
   b1 && b2 = true -> b1 /\ b2 = true. *)
@@ -150,7 +149,7 @@ Class IntegerBinaryRelation (T : Type) (rel : T -> T -> Prop) {IntT : IntegerTyp
 Variable implb andb orb eqb : bool -> bool -> bool.
 Definition istrue (b : bool) : Prop := b = true.
 
-Axiom TrueB : True <-> true = true.
+(* Axiom TrueB : True <-> true = true.
 Axiom FalseB : False <-> false = true.
 Axiom bfalse_negbtrue : forall b : bool, b = false <-> negb b = true.
 Axiom eq_sym : forall (A : Type) (x y : A), x = y <-> y = x.
@@ -158,15 +157,15 @@ Axiom impl_implb : forall (b1 b2 : bool), (b1 = true -> b2 = true) <-> (implb b1
 Axiom and_andb : forall (b1 b2 : bool), (b1 = true /\ b2 = true) <-> (andb b1 b2 = true).
 Axiom or_orb : forall (b1 b2 : bool), (b1 = true \/ b2 = true) <-> (orb b1 b2 = true).
 Axiom equiv_eqb : forall (b1 b2 : bool), (b1 = true <-> b2 = true) <-> (eqb b1 b2 = true).
-Axiom not_negb : forall b : bool, ~ b = true <-> negb b = true.
+Axiom not_negb : forall b : bool, ~ b = true <-> negb b = true. *)
 
 Ltac format_func f args :=
   match f with
   | ?f' ?arg => format_func f' (cons arg args)
-  | ?f' => constr:(pair f' args)
+  | ?f' => constr:((f', args))
   end.
 
-Ltac equals t t' :=
+(* Ltac equals t t' :=
   match t with
   | ?u =>
     match t' with
@@ -231,10 +230,44 @@ Ltac manage_S_rec n t :=
     constr:((to_Z x + n')%Z)
   end.
 
-Ltac manage_S t := manage_S_rec 0%Z t.
+Ltac manage_S t := manage_S_rec 0%Z t. *)
+
+(* lazymatch no backtracking *)
+
+Notation IsItEmbeddable := false.
+Notation IsItABinaryRelation := false.
+Notation Yes := false.
+Notation No := false.
+
+From Coq Require Import List.
+Import ListNotations.
+
+Ltac try_embed_id t :=
+  match IsItEmbeddable with
+  | Yes => constr:(inj_of_Z (inj_to_Z t))
+  | No => constr:(t)
+  end.
+
+Ltac try_g1 f1 t :=
+  match IsItEmbeddable with
+  | Yes => constr:(@g1 _ _ f1 _ _ _ (to_Z t))
+  | No => constr:(f1 t)
+  end.
+
+Ltac try_g2 f2 t1 t2 :=
+  match IsItEmbeddable with
+  | Yes => constr:(@g2 _ _ _ f2 _ _ _ _ (to_Z t1) (to_Z t2))
+  | No => constr:(f2 t1 t2)
+  end.
+
+Ltac try_relb_Z rel t1 t2 :=
+  match IsItEmbeddable with
+  | Yes => constr:((@relb_Z _ rel _ (to_Z t1) (to_Z t2)) = true)
+  | No => constr:(rel t1 t2)
+  end.
 
 Ltac embed t :=
-  match t with
+  lazymatch t with
   | True => constr:(true = true)
   | False => constr:(false = true)
   | ?b = false =>
@@ -252,50 +285,90 @@ Ltac embed t :=
   | ?t1 -> ?t2 =>
     let t1' := embed t1 in
     let t2' := embed t2 in
-    match t1', t2' with
-    | ?t1'' = true, ?t2'' = true => constr:(implb t1'' t2'' = true)
+    match t1' with
+    | ?t1'' = true =>
+      match t2' with
+      | ?t2'' = true => constr:(implb t1'' t2'' = true)
+      end
     | _ => constr:(t1' -> t2')
     end
   | ?t1 /\ ?t2 =>
     let t1' := embed t1 in
     let t2' := embed t2 in
-    match t1', t2' with
-    | ?t1'' = true, ?t2'' = true => constr:(andb t1'' t2'' = true)
+    match t1' with
+    | ?t1'' = true =>
+      match t2' with
+      | ?t2'' = true => constr:(andb t1'' t2'' = true)
+      end
     | _ => constr:(t1' /\ t2')
     end
   | ?t1 \/ ?t2 =>
     let t1' := embed t1 in
     let t2' := embed t2 in
-    match t1', t2' with
-    | ?t1'' = true, ?t2'' = true => constr:(orb t1'' t2'' = true)
+    match t1' with
+    | ?t1'' = true =>
+      match t2' with
+      | ?t2'' = true => constr:(orb t1'' t2'' = true)
+      end
     | _ => constr:(t1' \/ t2')
     end
   | ?t1 <-> ?t2 =>
     let t1' := embed t1 in
     let t2' := embed t2 in
-    match t1', t2' with
-    | ?t1'' = true, ?t2'' = true => constr:(eqb t1'' t2'' = true)
+    match t1' with
+    | ?t1'' = true =>
+      match t2' with
+      | ?t2'' = true => constr:(eqb t1'' t2'' = true)
+      end
     | _ => constr:(t1' <-> t2')
     end
-  | forall (x : ?T), ?t =>
-    let t' := embed t in
-    constr:(forall (x : T), t')
-  | istrue ?t =>
-    let t' := embed t in
-    constr:(t' = true)
-  | S ?x =>
-    let t' := manage_S (S x) in
-    embed t'
+  | forall (x : ?T), ?t' =>
+    let t'' := embed t' in
+    constr:(forall (x : T), t'')
+  | istrue ?b =>
+    let b' := embed b in
+    constr:(b' = true)
   | ?f ?arg =>
-    let p := format_func f (cons arg nil) in
+    let p := format_func f [arg] in
     let f := constr:(fst p) in
     let args := constr:(snd p) in
-
-  | ?x =>
-    let tx := type of x in
-    match tx with
-    | 
+    lazymatch args with
+    | [?arg] => try_g1 f arg
+    | [?arg1; ?arg2] =>
+      match IsItABinaryRelation with
+      | Yes => try_relb_Z f arg1 arg2
+      | No => try_g2 f arg1 arg2
+      end
+    | _ => t
+    end
+  | _ => try_embed_id t
   end.
+
+Variable int T : Type.
+Variable Oi : int.
+Variable mulint addint : int -> int -> int.
+Variable eqbint : int -> int -> bool.
+Instance integertype_nat : IntegerType nat. Admitted.
+Instance integertype_int : IntegerType int. Admitted.
+Instance integerfunc2_mulint : IntegerFunc2 int int int mulint. Admitted.
+Instance integerfunc2_addint : IntegerFunc2 int int int addint. Admitted.
+
+Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
+  True.
+Proof.
+  intros n x y f g h k m P b1 b2.
+  pose (G := f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> ((istrue (eqbint x y) /\ g (f n) = k y) \/ addint (h (g (f O))) (mulint y x) = Oi) \/ (P /\ forall u:int, u = Oi) -> istrue (negb (negb (negb b1)) && b2 || true)).
+  let G' := embed G in
+  pose (newgoal := G').
+
+  (* 
+  f args
+  - f connue
+    map embed args + change f en f'
+  - f inconnue
+    map embed args + embed résultat
+  
+  *)
 
 Ltac make_embeddings :=
   repeat
@@ -383,10 +456,7 @@ From mathcomp Require Import all_ssreflect.
 
 |}. *)
 
-(* Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
-f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> ((istrue (eqbint x y) /\ g (f n) = k y) \/ addint (h (g (f O))) (mulint y x) = Oi) \/ (P /\ forall u:int, u = Oi) -> istrue (negb (negb (negb b1)) && b2 || true).
-Proof.
-  intros n x y f g h k m P b1 b2. *)
+(*  *)
 
 (*
 let known_functions = Hashtbl.of_seq (List.to_seq
