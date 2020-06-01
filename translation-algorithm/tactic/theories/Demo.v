@@ -22,20 +22,9 @@ Proof.
   pose (h := u);
   idtac.
 
-Ltac reverse_rec acc l :=
-  match l with
-  | nil => acc
-  | cons ?hd ?tl =>
-    reverse_rec (cons hd acc) tl
-  end.
+*)
 
-Ltac reverse l :=
-  let t := type of l in
-  match t with
-  | list ?T => reverse_rec (@nil T) l
-  | _ => fail "cannot reverse a non-list term"
-  end.
-
+(*
 Ltac map_rec f acc l :=
   match l with
   | nil => acc
@@ -54,7 +43,21 @@ Ltac foldl f acc l :=
   | cons ?hd ?tl =>
     let acc' := f acc hd in
     foldl f acc' tl
+  end. *)
+
+Ltac reverse_rec acc l :=
+  match l with
+  | nil => acc
+  | cons ?hd ?tl =>
+    reverse_rec (cons hd acc) tl
   end.
+
+Ltac reverse l :=
+  let t := type of l in
+  match t with
+  | list ?T => reverse_rec (@nil T) l
+  | _ => fail "cannot reverse a non-list term"
+  end
 
 Ltac uncurry_rec input_types t :=
   match t with
@@ -65,20 +68,21 @@ Ltac uncurry_rec input_types t :=
     constr:((input_types', OutputType))
   end.
 
-Ltac uncurry f :=
-  let t := type of f in
-  uncurry_rec (@nil Type) t.
+Ltac uncurry t := uncurry_rec (@nil Type) t.
 
 Ltac input_types_of_function f :=
-  let t := uncurry f in
+  let tf := type of f in
+  let t := uncurry tf in
   let t' := eval compute in (fst t) in
   t'.
 
 Ltac output_type_of_function f :=
-  let t := uncurry f in
+  let tf := type of f in
+  let t := uncurry tf in
   let t' := eval compute in (snd t) in
   t'.
 
+  (*
 Ltac get_head x := lazymatch x with ?x _ => get_head x | _ => x end.
 Ltac inverse_tactic tactic := try (tactic; fail 1).
 Ltac constr_neq t u := inverse_tactic ltac:(constr_eq t u).
@@ -165,15 +169,7 @@ Ltac format_func f args :=
   | ?f' => constr:((f', args))
   end.
 
-(* Ltac equals t t' :=
-  match t with
-  | ?u =>
-    match t' with
-    | u => idtac
-    | _ => fail
-    end
-  end.
-
+(* 
 Ltac not_equals t t' := tryif equals t t' then fail else idtac.
 
 Ltac condition c :=
@@ -234,10 +230,20 @@ Ltac manage_S t := manage_S_rec 0%Z t. *)
 
 (* lazymatch no backtracking *)
 
+Ltac equals t t' :=
+  match t with
+  | ?u =>
+    match t' with
+    | u => constr:(true)
+    | _ => constr:(false)
+    end
+  end.
+
 Notation IsItEmbeddable := false.
 Notation IsItABinaryRelation := false.
 Notation Yes := false.
 Notation No := false.
+Notation Failure := false.
 
 From Coq Require Import List.
 Import ListNotations.
@@ -245,100 +251,266 @@ Import ListNotations.
 Ltac try_embed_id t :=
   match IsItEmbeddable with
   | Yes => constr:(inj_of_Z (inj_to_Z t))
-  | No => constr:(t)
+  | No => constr:(Failure)
   end.
 
-Ltac try_g1 f1 t :=
+Ltac try_g1 f1 :=
   match IsItEmbeddable with
-  | Yes => constr:(@g1 _ _ f1 _ _ _ (to_Z t))
-  | No => constr:(f1 t)
+  | Yes => constr:(@g1 _ _ f1 _ _ _)
+  | No => constr:(Failure)
   end.
 
-Ltac try_g2 f2 t1 t2 :=
+Ltac try_g2 f2 :=
   match IsItEmbeddable with
-  | Yes => constr:(@g2 _ _ _ f2 _ _ _ _ (to_Z t1) (to_Z t2))
-  | No => constr:(f2 t1 t2)
+  | Yes => constr:(@g2 _ _ _ f2 _ _ _ _)
+  | No => constr:(Failure)
   end.
 
 Ltac try_relb_Z rel t1 t2 :=
   match IsItEmbeddable with
-  | Yes => constr:((@relb_Z _ rel _ (to_Z t1) (to_Z t2)) = true)
-  | No => constr:(rel t1 t2)
+  | Yes => constr:(@relb_Z _ rel _)
+  | No => constr:(Failure)
   end.
 
-Ltac embed t :=
+Ltac embed target compulsory t :=
   lazymatch t with
-  | True => constr:(true = true)
-  | False => constr:(false = true)
-  | ?b = false =>
-    let b' := embed b in
-    constr:(negb b' = true)
-  | false = ?b =>
-    let b' := embed b in
-    constr:(negb b' = true)
-  | true = ?b =>
-    let b' := embed b in
-    constr:(b' = true)
-  | ~ ?b = true =>
-    let b' := embed b in
-    constr:(negb b' = true)
+  | True =>
+    match target with
+    | Prop => constr:(true = true)
+    | bool => constr:(true)
+    end
+  | False =>
+    match target with
+    | Prop => constr:(false = true)
+    | bool => constr:(false)
+    end
+
   | ?t1 -> ?t2 =>
-    let t1' := embed t1 in
-    let t2' := embed t2 in
+    let t1' := embed Prop true t1 in
+    let t2' := embed Prop true t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true => constr:(implb t1'' t2'' = true)
+      | ?t2'' = true =>
+        match target with
+        | Prop => constr:(implb t1'' t2'' = true)
+        | bool => constr:(implb t1'' t2'')
+        end
+      | _ => constr:(t1' -> t2')
       end
     | _ => constr:(t1' -> t2')
     end
+
   | ?t1 /\ ?t2 =>
-    let t1' := embed t1 in
-    let t2' := embed t2 in
+    let t1' := embed Prop true t1 in
+    let t2' := embed Prop true t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true => constr:(andb t1'' t2'' = true)
+      | ?t2'' = true =>
+        match target with
+        | Prop => constr:(andb t1'' t2'' = true)
+        | bool => constr:(andb t1'' t2'')
+        end
+      | _ => constr:(t1' /\ t2')
       end
     | _ => constr:(t1' /\ t2')
     end
+
   | ?t1 \/ ?t2 =>
-    let t1' := embed t1 in
-    let t2' := embed t2 in
+    let t1' := embed Prop true t1 in
+    let t2' := embed Prop true t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true => constr:(orb t1'' t2'' = true)
+      | ?t2'' = true =>
+        match target with
+        | Prop => constr:(orb t1'' t2'' = true)
+        | bool => constr:(orb t1'' t2'')
+        end
+      | _ => constr:(t1' \/ t2')
       end
     | _ => constr:(t1' \/ t2')
     end
+
   | ?t1 <-> ?t2 =>
-    let t1' := embed t1 in
-    let t2' := embed t2 in
+    let t1' := embed Prop true t1 in
+    let t2' := embed Prop true t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true => constr:(eqb t1'' t2'' = true)
+      | ?t2'' = true =>
+        match target with
+        | Prop => constr:(eqb t1'' t2'' = true)
+        | bool => constr:(eqb t1'' t2'')
+        end
+      | _ => constr:(t1' <-> t2')
       end
     | _ => constr:(t1' <-> t2')
     end
+
   | forall (x : ?T), ?t' =>
-    let t'' := embed t' in
+    let t'' := embed Prop true t' in
     constr:(forall (x : T), t'')
+
   | istrue ?b =>
-    let b' := embed b in
-    constr:(b' = true)
+    let b' := embed bool true b in
+    lazymatch target with
+    | Prop => constr:(b' = true)
+    | bool => constr:(b')
+    end
+
+  | true = ?b =>
+    let b' := embed bool true b in
+    lazymatch target with
+    | Prop => constr:(b' = true)
+    | bool => constr:(b')
+    end
+  | ?b = true =>
+    let b' := embed bool true b in
+    lazymatch target with
+    | Prop => constr:(b' = true)
+    | bool => constr:(b')
+    end
+  | false = ?b =>
+    let b' := embed bool true b in
+    lazymatch target with
+    | Prop => constr:(b' = false)
+    | bool => constr:(negb b')
+    end
+  | ?b = false =>
+    let b' := embed bool true b in
+    lazymatch target with
+    | Prop => constr:(b' = false)
+    | bool => constr:(negb b')
+    end
+  
+  | andb ?b1 ?b2 =>
+    let b1' := embed bool true b1 in
+    let b2' := embed bool true b2 in
+    constr:(andb b1' b2')
+  | orb ?b1 ?b2 =>
+    let b1' := embed bool true b1 in
+    let b2' := embed bool true b2 in
+    constr:(orb b1' b2')
+  | implb ?b1 ?b2 =>
+    let b1' := embed bool true b1 in
+    let b2' := embed bool true b2 in
+    constr:(implb b1' b2')
+  | eqb ?b1 ?b2 =>
+    let b1' := embed bool true b1 in
+    let b2' := embed bool true b2 in
+    constr:(eqb b1' b2')
+  | negb ?b =>
+    let b' := embed bool true b in
+    constr:(negb b')
+  
   | ?f ?arg =>
     let p := format_func f [arg] in
     let f := constr:(fst p) in
     let args := constr:(snd p) in
+    let out_t := output_type_of_function f in
     lazymatch args with
-    | [?arg] => try_g1 f arg
+    | [?arg] =>
+      let g1 := try_g1 f in
+      lazymatch g1 with
+      | Failure =>
+        let in_f := input_types_of_function f in
+        match in_f with
+        | [Prop] =>
+          let arg' := embed bool false arg in
+
+        | [?T] =>
+          let arg' := embed Z false arg in
+          let s := equals target out_t
+
+        end
+      | ?f' =>
+        let in_f' := input_types_of_function f' in
+        match in_f' with
+        | [?T] =>
+          let arg' := embed T true arg in
+          let out_t' := output_type_of_function f' in
+          match out_t' with
+          | bool =>
+            match target with
+            | Prop => constr:(f' arg' = true)
+            end
+          | _ => constr:(f' arg')
+          end
+        end
+      end
+        match com
+
+
+
+        let f_in_types, f'_in_types = input_types_of_function f, input_types_of_function f' in
+        let embed_arg arg target = embed ~target ~compulsory:true ~translation_table ~fresh arg in
+        let embedded_args = List.map2 embed_arg args f'_in_types in
+        (* if we got something in bool and the target is Prop, it is not lost, just add `= true` *)
+        if target = TProp && output_type' = Tbool then
+          App (eq Tbool, [App (f', embedded_args); b_true])
+        else
+          App (f', embedded_args)
+
+
+
+
+      end
     | [?arg1; ?arg2] =>
       match IsItABinaryRelation with
       | Yes => try_relb_Z f arg1 arg2
       | No => try_g2 f arg1 arg2
       end
+
+
+
+      let f_in_types = input_types_of_function f in
+      let embed_arg arg type_before =
+        if type_before = TProp then embed ~target:Tbool ~compulsory:false ~translation_table ~fresh arg
+        else embed ~target:TZ ~compulsory:false ~translation_table ~fresh arg
+      in
+      let embedded_args = List.map2 embed_arg args f_in_types in
+      let embedded_args_types = List.map type_of embedded_args in
+      if target = output_type then
+        if embedded_args_types = f_in_types then
+          (* f has the right type and the types of the arguments have not changed after trying an embedding *)
+          App (f, embedded_args)
+        else begin
+          (* f has the right type but the arguments have been embedded, we need to create an f' *)
+          let f' =
+            Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = output_type })
+          in
+          Hashtbl.add translation_table f f';
+          App (f', embedded_args)
+        end
+      else
+        if exists_morphism ~m_from:output_type ~m_to:target then begin
+          (* f does not have the right type, we need to create an f' *)
+          let f' =
+            Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = target })
+          in
+          Hashtbl.add translation_table f f';
+          App (f', embedded_args)
+        end
+        (* f does not have the right output type, and cannot be embedded *)
+        else if compulsory then
+          raise (Embedding_error (Printf.sprintf
+            "application %s cannot be embedded correctly"
+            (pprint_to_str false f)))
+        (* embedding was not compulsory and the inputs have not changed, we can keep f *)
+        else if embedded_args_types = f_in_types then App (f, embedded_args)
+        else
+        (* embedding was not compulsory, but the inputs have changed, so we can change f with an f' *)
+        let f' =
+          Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = output_type })
+        in
+        Hashtbl.add translation_table f f';
+        App (f', embedded_args)
+
+
+
+
     | _ => t
     end
   | _ => try_embed_id t
