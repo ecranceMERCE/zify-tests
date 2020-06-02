@@ -254,6 +254,27 @@ Ltac try_embed_id t :=
   | No => constr:(Failure)
   end.
 
+Ltac embeddable T target :=
+  match target with
+  | bool =>
+    match T with
+    | bool => constr:(true)
+    | _ => constr:(false)
+    end
+  | Prop =>
+    match T with
+    | bool => constr:(true)
+    | Prop => constr:(true)
+    | _ => constr:(false)
+    end
+  | Z =>
+    match IsItEmbeddable with
+    | Yes =>
+      let _ := constr:(@to_Z T _) in
+      constr:(true)
+    | No => constr:(false)
+  end.
+
 Ltac try_g1 f1 :=
   match IsItEmbeddable with
   | Yes => constr:(@g1 _ _ f1 _ _ _)
@@ -266,10 +287,17 @@ Ltac try_g2 f2 :=
   | No => constr:(Failure)
   end.
 
-Ltac try_relb_Z rel t1 t2 :=
+Ltac try_relb_Z rel :=
   match IsItEmbeddable with
   | Yes => constr:(@relb_Z _ rel _)
   | No => constr:(Failure)
+  end.
+
+Ltac try_associated_func f args :=
+  lazymatch args with
+  | [?arg] => try_g1 f
+  | [?arg1; ?arg2] => try_g2 f
+  | _ => constr:(Failure)
   end.
 
 Ltac embed target compulsory t :=
@@ -409,111 +437,101 @@ Ltac embed target compulsory t :=
     let p := format_func f [arg] in
     let f := constr:(fst p) in
     let args := constr:(snd p) in
-    let out_t := output_type_of_function f in
-    lazymatch args with
-    | [?arg] =>
-      let g1 := try_g1 f in
-      lazymatch g1 with
+    let f_out_type := output_type_of_function f in
+    match args with
+    | [?arg1; ?arg2] =>
+      let g := try_relb_Z f in
+      match g with
+      | ?rel' =>
+        let arg1' := embed Z true arg1 in
+        let arg2' := embed Z true arg2 in
+        match target with
+        | Prop => constr:(rel' arg1' arg2' = true)
+        | bool => constr:(rel' arg1' arg2')
+        end
+      end
+    | _ =>
+      let g := try_associated_func f args in
+      lazymatch g with
       | Failure =>
-        let in_f := input_types_of_function f in
-        match in_f with
-        | [Prop] =>
-          let arg' := embed bool false arg in
-
-        | [?T] =>
-          let arg' := embed Z false arg in
-          let s := equals target out_t
-
+        let f_in_types := input_types_of_function f in
+        let embed_arg arg type_before :=
+          match type_before with
+          | Prop => embed bool false arg
+          | _ => embed Z false arg
+          end
+        in
+        let embedded_args := map2 embed_arg args f_in_types in
+        let embedded_args_types := map (fun t => type of t) embedded_args in
+        let out_of_f_is_target := equals target f_out_type in
+        lazymatch out_of_f_is_target with
+        | true =>
+          let embedded_args_same_type_as_args := equals embedded_args_types f_in_types in
+          lazymatch embedded_args_same_type_as_args with
+          | true => make_term f embedded_args
+          | false =>
+            let f' :=
+              (* TODO : créer f' à partir des types qui ont changé, à base de f composée avec des of_Z ou (= true) *)
+            in
+            (* pas de mémoire *)
+            make_term f' embedded_args
+          end
+        | false =>
+          let out_of_f_is_embeddable := embeddable f_out_type target in
+          match out_of_f_is_embeddable with
+          | true =>
+            let f' :=
+              (* TODO : créer f' à partir des types qui ont changé + injecter le résultat (possible) *)
+            in
+            make_term f' embedded_args
+            (* pas de mémoire *)
+            (* TODO : travailler sur les identités, car on ne peut pas fonctionner par mémoire... *)
+          | false =>
+            match compulsory with
+            | true => (* TODO : fail *)
+            | false =>
+              match embedded_args_same_type_as_args with
+              | true => make_term f embedded_args
+              | false =>
+                let f' :=
+                  (* TODO : créer f' à partir des types qui ont changé, mais on n'injecte pas le résultat *)
+                in
+                (* pas de mémoire *)
+                make_term f' embedded_args
+            end
         end
       | ?f' =>
-        let in_f' := input_types_of_function f' in
-        match in_f' with
-        | [?T] =>
-          let arg' := embed T true arg in
-          let out_t' := output_type_of_function f' in
-          match out_t' with
-          | bool =>
-            match target with
-            | Prop => constr:(f' arg' = true)
-            end
-          | _ => constr:(f' arg')
+        let f_in_types := input_types_of_function f in
+        let f'_in_types := input_types_of_function f' in
+        let embed_arg arg target := embed target true arg in
+        let embedded_args := map2 embed_arg args f'_in_types in
+        let t := make_term f' embedded_args in
+        match target with
+        | Prop =>
+          let f'_out_type := output_type_of_function f' in
+          match f'_out_type with
+          | bool => constr:(t = true)
           end
+        | _ => constr:(t)
         end
       end
-        match com
-
-
-
-        let f_in_types, f'_in_types = input_types_of_function f, input_types_of_function f' in
-        let embed_arg arg target = embed ~target ~compulsory:true ~translation_table ~fresh arg in
-        let embedded_args = List.map2 embed_arg args f'_in_types in
-        (* if we got something in bool and the target is Prop, it is not lost, just add `= true` *)
-        if target = TProp && output_type' = Tbool then
-          App (eq Tbool, [App (f', embedded_args); b_true])
-        else
-          App (f', embedded_args)
-
-
-
-
-      end
-    | [?arg1; ?arg2] =>
-      match IsItABinaryRelation with
-      | Yes => try_relb_Z f arg1 arg2
-      | No => try_g2 f arg1 arg2
-      end
-
-
-
-      let f_in_types = input_types_of_function f in
-      let embed_arg arg type_before =
-        if type_before = TProp then embed ~target:Tbool ~compulsory:false ~translation_table ~fresh arg
-        else embed ~target:TZ ~compulsory:false ~translation_table ~fresh arg
-      in
-      let embedded_args = List.map2 embed_arg args f_in_types in
-      let embedded_args_types = List.map type_of embedded_args in
-      if target = output_type then
-        if embedded_args_types = f_in_types then
-          (* f has the right type and the types of the arguments have not changed after trying an embedding *)
-          App (f, embedded_args)
-        else begin
-          (* f has the right type but the arguments have been embedded, we need to create an f' *)
-          let f' =
-            Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = output_type })
-          in
-          Hashtbl.add translation_table f f';
-          App (f', embedded_args)
-        end
-      else
-        if exists_morphism ~m_from:output_type ~m_to:target then begin
-          (* f does not have the right type, we need to create an f' *)
-          let f' =
-            Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = target })
-          in
-          Hashtbl.add translation_table f f';
-          App (f', embedded_args)
-        end
-        (* f does not have the right output type, and cannot be embedded *)
-        else if compulsory then
-          raise (Embedding_error (Printf.sprintf
-            "application %s cannot be embedded correctly"
-            (pprint_to_str false f)))
-        (* embedding was not compulsory and the inputs have not changed, we can keep f *)
-        else if embedded_args_types = f_in_types then App (f, embedded_args)
-        else
-        (* embedding was not compulsory, but the inputs have changed, so we can change f with an f' *)
-        let f' =
-          Var (fresh (name_of_function f), Tarrow { in_types = embedded_args_types; out_type = output_type })
-        in
-        Hashtbl.add translation_table f f';
-        App (f', embedded_args)
-
-
-
-
-    | _ => t
     end
-  | _ => try_embed_id t
+  | _ =>
+    let tt := type of t in
+    let t_is_embeddable := embeddable tt target in
+    match t_is_embeddable with
+    | true =>
+      let t' :=
+        (* créer nouvelle variable avec plongement *)
+      in
+      (* pas de mémoire *)
+      constr:(t')
+    | false =>
+      match compulsory with
+      | true => (* TODO : fail *)
+      | false => constr:(t)
+      end
+    end
   end.
 
 Variable int T : Type.
