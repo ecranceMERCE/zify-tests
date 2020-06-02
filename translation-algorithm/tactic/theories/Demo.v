@@ -1,50 +1,3 @@
-(* From Embedding Require Import Loader. *)
-
-(* Goal True.
-Proof.
-  let v := findv in
-  pose (u := v).
-  reflexivity.
-Qed.
-
-Ltac t := idtac "hello".
-
-Ltac t2 :=
-  tryif t then
-    constr:(3)
-  else
-    constr:(2).
-
-Goal True.
-Proof.
-  let u := t2 in
-  let h := fresh in
-  pose (h := u);
-  idtac.
-
-*)
-
-(*
-Ltac map_rec f acc l :=
-  match l with
-  | nil => acc
-  | cons ?hd ?tl =>
-    let hd' := f hd in
-    map_rec f (cons hd' acc) tl
-  end.
-
-Ltac map f l :=
-  let l' := map_rec f nil l in
-  reverse l'.
-
-Ltac foldl f acc l :=
-  match l with
-  | nil => acc
-  | cons ?hd ?tl =>
-    let acc' := f acc hd in
-    foldl f acc' tl
-  end. *)
-
 Ltac reverse_rec acc l :=
   match l with
   | nil => acc
@@ -57,7 +10,19 @@ Ltac reverse l :=
   match t with
   | list ?T => reverse_rec (@nil T) l
   | _ => fail "cannot reverse a non-list term"
-  end
+  end.
+
+Ltac map_rec f acc l :=
+  match l with
+  | nil => acc
+  | cons ?hd ?tl =>
+    let hd' := f hd in
+    map_rec f (cons hd' acc) tl
+  end.
+
+Ltac map f l :=
+  let l' := map_rec f uconstr:(nil) l in
+  reverse l'.
 
 Ltac uncurry_rec input_types t :=
   match t with
@@ -131,9 +96,9 @@ Proof.
     apply H.
 Qed.
 
-Ltac is_integertype x :=
+(* Ltac is_integertype x :=
   let t := fresh in
-  tryif pose (t := (to_Z x)) then clear t; idtac else fail.
+  tryif pose (t := (to_Z x)) then clear t; idtac else fail. *)
 
 Class IntegerFunc1 (T1 T2 : Type) (f1 : T1 -> T2) {IntT1 : IntegerType T1} {IntT2 : IntegerType T2} := {
   g1 : Z -> Z;
@@ -170,53 +135,6 @@ Ltac format_func f args :=
   end.
 
 (* 
-Ltac not_equals t t' := tryif equals t t' then fail else idtac.
-
-Ltac condition c :=
-  match c with
-  | true => idtac
-  | false => fail
-  end.
-
-Ltac not_condition c := tryif condition c then fail else idtac.
-
-Ltac option_value o default :=
-  match o with
-  | None => default
-  | Some ?v => v
-  end.
-
-Ltac find_arg arg :=
-  match arg with
-  | of_Z ?x => constr:(pair true x)
-  | ?x => constr:(pair false x)
-  end.
-
-Ltac find_args_under_f args := map find_arg args.
-
-Ltac generate_name acc arg :=
-  match acc with
-  | cons ?n _ =>
-    let n' := fresh n in
-    constr:(cons n' acc)
-  end.
-
-Ltac generate_names args :=
-  let n := fresh in
-  foldl generate_name (cons n nil) args.
-
-Ltac make_term t args :=
-  match args with
-  | nil => t
-  | cons ?hd ?tl => make_term (t hd) tl
-  end.
-
-Ltac make_function names t :=
-  match names with
-  | nil => t
-  | cons ?hd ?tl => make_function tl (fun hd => t)
-  end.
-
 Ltac manage_S_rec n t :=
   lazymatch t with
   | S ?t' => manage_S_rec (n + 1)%Z t'
@@ -228,7 +146,11 @@ Ltac manage_S_rec n t :=
 
 Ltac manage_S t := manage_S_rec 0%Z t. *)
 
-(* lazymatch no backtracking *)
+Ltac make_term t args :=
+  match args with
+  | nil => t
+  | cons ?hd ?tl => make_term (t hd) tl
+  end.
 
 Ltac equals t t' :=
   match t with
@@ -248,13 +170,13 @@ Notation Failure := false.
 From Coq Require Import List.
 Import ListNotations.
 
-Ltac try_embed_id t :=
+(* Ltac try_embed_id t :=
   match IsItEmbeddable with
   | Yes => constr:(inj_of_Z (inj_to_Z t))
   | No => constr:(Failure)
-  end.
+  end. *)
 
-Ltac embeddable T target :=
+(* Ltac embeddable T target :=
   match target with
   | bool =>
     match T with
@@ -273,9 +195,10 @@ Ltac embeddable T target :=
       let _ := constr:(@to_Z T _) in
       constr:(true)
     | No => constr:(false)
-  end.
+    end
+  end. *)
 
-Ltac try_g1 f1 :=
+(* Ltac try_g1 f1 :=
   match IsItEmbeddable with
   | Yes => constr:(@g1 _ _ f1 _ _ _)
   | No => constr:(Failure)
@@ -298,243 +221,112 @@ Ltac try_associated_func f args :=
   | [?arg] => try_g1 f
   | [?arg1; ?arg2] => try_g2 f
   | _ => constr:(Failure)
+  end. *)
+
+Ltac iter f l :=
+  match l with
+  | nil => idtac
+  | cons ?hd ?tl => f hd; iter f tl
   end.
 
-Ltac embed target compulsory t :=
-  lazymatch t with
-  | True =>
-    match target with
-    | Prop => constr:(true = true)
-    | bool => constr:(true)
-    end
-  | False =>
-    match target with
-    | Prop => constr:(false = true)
-    | bool => constr:(false)
-    end
+Ltac get_fst p :=
+  match p with
+  | (?t, _) => t
+  end.
 
-  | ?t1 -> ?t2 =>
-    let t1' := embed Prop true t1 in
-    let t2' := embed Prop true t2 in
+Ltac get_snd p :=
+  match p with
+  | (_, ?t) => t
+  end.
+
+Ltac embed t :=
+ lazymatch t with
+  | True => (* idtac n "True" *) constr:(true = true)
+  | False => (* idtac n "False" *) constr:(false = true)
+  | ?t1 -> ?t2 => (* idtac n "impl"; embed (S n) t1; embed (S n) t2 *)
+    let t1' := embed t1 in
+    let t2' := embed t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true =>
-        match target with
-        | Prop => constr:(implb t1'' t2'' = true)
-        | bool => constr:(implb t1'' t2'')
-        end
-      | _ => constr:(t1' -> t2')
+      | ?t2'' = true => constr:(implb t1'' t2'' = true)
       end
     | _ => constr:(t1' -> t2')
     end
-
-  | ?t1 /\ ?t2 =>
-    let t1' := embed Prop true t1 in
-    let t2' := embed Prop true t2 in
+  | ?t1 /\ ?t2 => (* idtac n "and"; embed (S n) t1; embed (S n) t2 *)
+    let t1' := embed t1 in
+    let t2' := embed t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true =>
-        match target with
-        | Prop => constr:(andb t1'' t2'' = true)
-        | bool => constr:(andb t1'' t2'')
-        end
-      | _ => constr:(t1' /\ t2')
+      | ?t2'' = true => constr:(andb t1'' t2'' = true)
       end
     | _ => constr:(t1' /\ t2')
     end
-
-  | ?t1 \/ ?t2 =>
-    let t1' := embed Prop true t1 in
-    let t2' := embed Prop true t2 in
+  | ?t1 \/ ?t2 => (* idtac n "or"; embed (S n) t1; embed (S n) t2 *)
+    let t1' := embed t1 in
+    let t2' := embed t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true =>
-        match target with
-        | Prop => constr:(orb t1'' t2'' = true)
-        | bool => constr:(orb t1'' t2'')
-        end
-      | _ => constr:(t1' \/ t2')
+      | ?t2'' = true => constr:(orb t1'' t2'' = true)
       end
     | _ => constr:(t1' \/ t2')
     end
-
-  | ?t1 <-> ?t2 =>
-    let t1' := embed Prop true t1 in
-    let t2' := embed Prop true t2 in
+  | ?t1 <-> ?t2 => (* idtac n "equiv"; embed (S n) t1; embed (S n) t2 *)
+    let t1' := embed t1 in
+    let t2' := embed t2 in
     match t1' with
     | ?t1'' = true =>
       match t2' with
-      | ?t2'' = true =>
-        match target with
-        | Prop => constr:(eqb t1'' t2'' = true)
-        | bool => constr:(eqb t1'' t2'')
-        end
-      | _ => constr:(t1' <-> t2')
+      | ?t2'' = true => constr:(eqb t1'' t2'' = true)
       end
     | _ => constr:(t1' <-> t2')
     end
-
-  | forall (x : ?T), ?t' =>
-    let t'' := embed Prop true t' in
+  | forall (x : ?T), ?t' => (* idtac n "forall"; embed (S n) t' *)
+    let t'' := embed t' in
     constr:(forall (x : T), t'')
-
-  | istrue ?b =>
-    let b' := embed bool true b in
-    lazymatch target with
-    | Prop => constr:(b' = true)
-    | bool => constr:(b')
-    end
-
-  | true = ?b =>
-    let b' := embed bool true b in
-    lazymatch target with
-    | Prop => constr:(b' = true)
-    | bool => constr:(b')
-    end
-  | ?b = true =>
-    let b' := embed bool true b in
-    lazymatch target with
-    | Prop => constr:(b' = true)
-    | bool => constr:(b')
-    end
-  | false = ?b =>
-    let b' := embed bool true b in
-    lazymatch target with
-    | Prop => constr:(b' = false)
-    | bool => constr:(negb b')
-    end
-  | ?b = false =>
-    let b' := embed bool true b in
-    lazymatch target with
-    | Prop => constr:(b' = false)
-    | bool => constr:(negb b')
-    end
-  
-  | andb ?b1 ?b2 =>
-    let b1' := embed bool true b1 in
-    let b2' := embed bool true b2 in
-    constr:(andb b1' b2')
-  | orb ?b1 ?b2 =>
-    let b1' := embed bool true b1 in
-    let b2' := embed bool true b2 in
-    constr:(orb b1' b2')
-  | implb ?b1 ?b2 =>
-    let b1' := embed bool true b1 in
-    let b2' := embed bool true b2 in
-    constr:(implb b1' b2')
-  | eqb ?b1 ?b2 =>
-    let b1' := embed bool true b1 in
-    let b2' := embed bool true b2 in
-    constr:(eqb b1' b2')
-  | negb ?b =>
-    let b' := embed bool true b in
-    constr:(negb b')
-  
+  | istrue ?b => (* idtac n "istrue"; embed (S n) b *)
+    let b' := embed b in
+    constr:(b' = true)
+  | true = ?b => (* idtac n "true="; embed (S n) b *)
+    let b' := embed b in
+    constr:(b' = true)
+  | false = ?b => (* idtac n "false="; embed (S n) b *)
+    let b' := embed b in
+    constr:(negb b' = true)
+  | ?b = false => (* idtac n "=false"; embed (S n) b *)
+    let b' := embed b in
+    constr:(negb b' = true)
   | ?f ?arg =>
+    (* let p := format_func f [arg] in
+    idtac n "pair" p;
+    let f := get_fst p in
+    let args := get_snd p in
+    idtac n "f" f;
+    iter ltac:(fun x => embed (S n) x) args *)
     let p := format_func f [arg] in
-    let f := constr:(fst p) in
-    let args := constr:(snd p) in
-    let f_out_type := output_type_of_function f in
-    match args with
-    | [?arg1; ?arg2] =>
-      let g := try_relb_Z f in
-      match g with
-      | ?rel' =>
-        let arg1' := embed Z true arg1 in
-        let arg2' := embed Z true arg2 in
-        match target with
-        | Prop => constr:(rel' arg1' arg2' = true)
-        | bool => constr:(rel' arg1' arg2')
-        end
-      end
-    | _ =>
-      let g := try_associated_func f args in
-      lazymatch g with
-      | Failure =>
-        let f_in_types := input_types_of_function f in
-        let embed_arg arg type_before :=
-          match type_before with
-          | Prop => embed bool false arg
-          | _ => embed Z false arg
-          end
-        in
-        let embedded_args := map2 embed_arg args f_in_types in
-        let embedded_args_types := map (fun t => type of t) embedded_args in
-        let out_of_f_is_target := equals target f_out_type in
-        lazymatch out_of_f_is_target with
-        | true =>
-          let embedded_args_same_type_as_args := equals embedded_args_types f_in_types in
-          lazymatch embedded_args_same_type_as_args with
-          | true => make_term f embedded_args
-          | false =>
-            let f' :=
-              (* TODO : créer f' à partir des types qui ont changé, à base de f composée avec des of_Z ou (= true) *)
-            in
-            (* pas de mémoire *)
-            make_term f' embedded_args
-          end
-        | false =>
-          let out_of_f_is_embeddable := embeddable f_out_type target in
-          match out_of_f_is_embeddable with
-          | true =>
-            let f' :=
-              (* TODO : créer f' à partir des types qui ont changé + injecter le résultat (possible) *)
-            in
-            make_term f' embedded_args
-            (* pas de mémoire *)
-            (* TODO : travailler sur les identités, car on ne peut pas fonctionner par mémoire... *)
-          | false =>
-            match compulsory with
-            | true => (* TODO : fail *)
-            | false =>
-              match embedded_args_same_type_as_args with
-              | true => make_term f embedded_args
-              | false =>
-                let f' :=
-                  (* TODO : créer f' à partir des types qui ont changé, mais on n'injecte pas le résultat *)
-                in
-                (* pas de mémoire *)
-                make_term f' embedded_args
-            end
-        end
-      | ?f' =>
-        let f_in_types := input_types_of_function f in
-        let f'_in_types := input_types_of_function f' in
-        let embed_arg arg target := embed target true arg in
-        let embedded_args := map2 embed_arg args f'_in_types in
-        let t := make_term f' embedded_args in
-        match target with
-        | Prop =>
-          let f'_out_type := output_type_of_function f' in
-          match f'_out_type with
-          | bool => constr:(t = true)
-          end
-        | _ => constr:(t)
-        end
-      end
+    let f := get_fst p in
+    let args := get_snd p in
+    let embedded_args := map embed args in
+    let t' := make_term f embedded_args in
+    let T := type of t' in
+    match IsItEmbeddable with
+    | Yes => constr:(@of_Z T _ (@to_Z T _ t'))
+    | No => constr:(t')
     end
-  | _ =>
-    let tt := type of t in
-    let t_is_embeddable := embeddable tt target in
-    match t_is_embeddable with
-    | true =>
-      let t' :=
-        (* créer nouvelle variable avec plongement *)
-      in
-      (* pas de mémoire *)
-      constr:(t')
-    | false =>
-      match compulsory with
-      | true => (* TODO : fail *)
-      | false => constr:(t)
-      end
+  | ?x => (* idtac n "autre" *)
+    let T := type of x in
+    match IsItEmbeddable with
+    | Yes => constr:(@of_Z T _ (@to_Z T _ x))
+    | No => constr:(x)
     end
   end.
 
-Variable int T : Type.
+(* Ltac  *)
+
+
+Variable int U : Type.
 Variable Oi : int.
 Variable mulint addint : int -> int -> int.
 Variable eqbint : int -> int -> bool.
@@ -543,12 +335,19 @@ Instance integertype_int : IntegerType int. Admitted.
 Instance integerfunc2_mulint : IntegerFunc2 int int int mulint. Admitted.
 Instance integerfunc2_addint : IntegerFunc2 int int int addint. Admitted.
 
-Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> T) (h : T -> int) (k : int -> T) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
+Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> U) (h : U -> int) (k : int -> U) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
   True.
 Proof.
   intros n x y f g h k m P b1 b2.
-  pose (G := f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> ((istrue (eqbint x y) /\ g (f n) = k y) \/ addint (h (g (f O))) (mulint y x) = Oi) \/ (P /\ forall u:int, u = Oi) -> istrue (negb (negb (negb b1)) && b2 || true)).
-  let G' := embed G in
+  let G' := embed (f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> istrue (negb (negb (negb b1)) && b2 || true)) in
+  pose (newgoal := G').
+Abort.
+
+Goal forall (n : nat) (x y : int) (f : nat -> int) (g : int -> U) (h : U -> int) (k : int -> U) (m : nat -> nat) (P : Prop) (b1 b2 : bool),
+  True.
+Proof.
+  intros n x y f g h k m P b1 b2.
+  let G' := embed (f (S (S (m n)) + S (S O)) = mulint (f (S n)) x -> ((istrue (eqbint x y) /\ g (f n) = k y) \/ addint (h (g (f O))) (mulint y x) = Oi) \/ (P /\ forall u:int, u = Oi) -> istrue (negb (negb (negb b1)) && b2 || true)) in
   pose (newgoal := G').
 
   (* 
