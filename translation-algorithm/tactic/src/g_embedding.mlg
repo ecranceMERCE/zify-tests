@@ -1,5 +1,0 @@
-DECLARE PLUGIN "embedding_plugin"
-
-(* {
-  open Ltac_plugin
-} *)

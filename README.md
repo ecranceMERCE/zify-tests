@@ -9,4 +9,5 @@ In the `coq-tests` directory:
 - `uninterpreted.v`: some tests on uninterpreted values.
 
 In the `translation-algorithm` directory:
-- `translation.ml`: an OCaml algorithm to translate `bool` to `Prop` and various integer types to `Z` in goals expressed in a simplified model of Coq's types, and with uninterpreted values.
+- `translation.ml`: an OCaml algorithm to translate `bool` to `Prop` and various integer types to `Z` in goals expressed in a simplified model of Coq's types, and with uninterpreted values;
+- `tactic` directory: will be a Coq version of the previous file.

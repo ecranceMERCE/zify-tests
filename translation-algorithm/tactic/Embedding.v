@@ -323,7 +323,15 @@ Ltac embed t :=
     end
   end.
 
-(* Ltac  *)
+(*
+TODO tactique Ltac qui fait :
+  @to_Z ?T _ x -> renommer en x' partout dans le goal
+  f (of_Z x) (of_Z y) (fonction binaire) type de sortie Prop -> tenter relation binaire avec = true
+  to_Z (f (of_Z x)) -> tenter g1
+  to_Z (f (of_Z x) (of_Z y)) -> tenter g2
+  connecteurs logiques avec = true des 2 côtés -> version booléenne
+
+Ltac  *)
 
 
 Variable int U : Type.
